@@ -1,7 +1,9 @@
 import { defineBackend } from '@aws-amplify/backend';
 import { CfnUserPoolGroup } from 'aws-cdk-lib/aws-cognito';
+import { FunctionUrlAuthType } from 'aws-cdk-lib/aws-lambda';
 import { auth } from './auth/resource';
 import { data } from './data/resource';
+import { bridge } from './functions/bridge/resource';
 
 /**
  * Deploy region: ap-northeast-1 (Tokyo). Amplify Gen2 takes the region from the
@@ -11,6 +13,7 @@ import { data } from './data/resource';
 const backend = defineBackend({
   auth,
   data,
+  bridge,
 });
 
 // Self sign-up DISABLED — operators are admin-created only.
@@ -32,8 +35,18 @@ backend.data.resources.cfnResources.amplifyDynamoDbTables['FreeeOAuthState'].tim
     enabled: true,
   };
 
+// GPT-facing bridge: public Function URL (auth is the in-handler API-key check,
+// deny-by-default). Grant read on the ApiKey table for key validation.
+const bridgeUrl = backend.bridge.resources.lambda.addFunctionUrl({
+  authType: FunctionUrlAuthType.NONE,
+});
+const apiKeyTable = backend.data.resources.tables['ApiKey'];
+apiKeyTable.grantReadData(backend.bridge.resources.lambda);
+backend.bridge.addEnvironment('APIKEY_TABLE', apiKeyTable.tableName);
+
+backend.addOutput({ custom: { bridgeUrl: bridgeUrl.url } });
+
 // NOTE (follow-up PR): freee OAuth Lambdas (state issuer + callback + set-secret
-// + rotate) and the bridge function (GET /tools / POST /call via free-actions-core)
-// are added here, with Function URLs, KMS for state/token encryption, and IAM
-// grants to the FreeeConnection table. Built from public sources only
-// (free-mcp-core / free-actions-core / standard OAuth + AWS SDK).
+// + rotate) populate FreeeConnection tokens (KMS-encrypted), the bridge then
+// resolves a TokenContext and makeApiRequest calls freee live. Plus JP managed
+// login (CDK) and first-admin bootstrap. Public sources only.

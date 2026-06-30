@@ -39,6 +39,20 @@ const schema = a.schema({
       ttl: a.integer(), // epoch seconds (DynamoDB TTL attribute)
     })
     .authorization((allow) => [allow.group('app-admin')]),
+
+  // API keys that authorize the GPT-facing bridge. Issued ONLY by app-admin via
+  // the GUI; the full key is shown once and stored here as a hash (never plain).
+  // The bridge Lambda validates incoming keys against this table over IAM.
+  ApiKey: a
+    .model({
+      label: a.string().required(),
+      prefix: a.string().required(), // leading chars, for identifying a key in the list
+      hashedKey: a.string().required(), // sha-256(full key); plaintext never stored
+      createdBy: a.string(),
+      revokedAt: a.datetime(), // null = active
+      lastUsedAt: a.datetime(),
+    })
+    .authorization((allow) => [allow.group('app-admin')]),
 });
 
 export type Schema = ClientSchema<typeof schema>;
