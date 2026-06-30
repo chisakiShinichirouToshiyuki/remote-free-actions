@@ -35,18 +35,17 @@ backend.data.resources.cfnResources.amplifyDynamoDbTables['FreeeOAuthState'].tim
     enabled: true,
   };
 
-// GPT-facing bridge: public Function URL (auth is the in-handler API-key check,
-// deny-by-default). Grant read on the ApiKey table for key validation.
+// GPT-facing bridge: public Function URL. Auth is the in-handler Cognito JWT
+// check (deny-by-default) — GPT signs in via Cognito OAuth and sends a Bearer.
 const bridgeUrl = backend.bridge.resources.lambda.addFunctionUrl({
   authType: FunctionUrlAuthType.NONE,
 });
-const apiKeyTable = backend.data.resources.tables['ApiKey'];
-apiKeyTable.grantReadData(backend.bridge.resources.lambda);
-backend.bridge.addEnvironment('APIKEY_TABLE', apiKeyTable.tableName);
+backend.bridge.addEnvironment('USER_POOL_ID', backend.auth.resources.userPool.userPoolId);
+backend.bridge.addEnvironment('CLIENT_ID', backend.auth.resources.userPoolClient.userPoolClientId);
 
 backend.addOutput({ custom: { bridgeUrl: bridgeUrl.url } });
 
-// NOTE (follow-up PR): freee OAuth Lambdas (state issuer + callback + set-secret
-// + rotate) populate FreeeConnection tokens (KMS-encrypted), the bridge then
-// resolves a TokenContext and makeApiRequest calls freee live. Plus JP managed
-// login (CDK) and first-admin bootstrap. Public sources only.
+// NOTE (follow-up): the connect flow populates this app's own freee token
+// (KMS-encrypted in DynamoDB); the bridge then calls freee via fetch with that
+// token. Plus JP managed login (CDK) + first-admin bootstrap. Self-contained,
+// public sources only — no access to any other project.

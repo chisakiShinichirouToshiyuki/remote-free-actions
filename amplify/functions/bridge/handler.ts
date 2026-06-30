@@ -1,27 +1,25 @@
-import { createHash } from 'node:crypto';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import { ActionsBridge, type McpProxyLike, type McpTool } from 'free-actions-core';
-import { listAllAvailablePaths, makeApiRequest } from 'free-mcp-core';
 
-const REGION = process.env.AWS_REGION ?? 'ap-northeast-1';
-const APIKEY_TABLE = process.env.APIKEY_TABLE ?? '';
-const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({ region: REGION }));
+const USER_POOL_ID = process.env.USER_POOL_ID ?? '';
+const CLIENT_ID = process.env.CLIENT_ID ?? '';
+
+// Verify Cognito access tokens (GPT signs in via Cognito OAuth, sends Bearer).
+const verifier = CognitoJwtVerifier.create({
+  userPoolId: USER_POOL_ID,
+  tokenUse: 'access',
+  clientId: CLIENT_ID || null,
+});
 
 class NotConnectedError extends Error {
   constructor() {
-    super('No freee app is connected yet. An operator must connect freee in the admin screen first.');
+    super('freee is not connected yet. An operator must connect freee in the admin screen first.');
     this.name = 'NotConnectedError';
   }
 }
 
-/** The curated freee tool surface exposed to the GPT (mcp-mimic). */
+/** Curated freee tool surface exposed to the GPT (mcp-mimic). */
 const TOOLS: McpTool[] = [
-  {
-    name: 'freee_api_list_paths',
-    description: 'List the available freee API paths/operations (no auth required).',
-    inputSchema: { type: 'object', additionalProperties: false, properties: {} },
-  },
   {
     name: 'freee_api_get',
     description: 'GET a freee API path, e.g. /api/1/companies or /api/1/deals.',
@@ -50,58 +48,32 @@ const TOOLS: McpTool[] = [
   },
 ];
 
-/** McpProxyLike backed by free-mcp-core (public exports only). */
+/**
+ * In-process tool source for the bridge. freee calls run against this app's own
+ * connected freee account (token from this app's DynamoDB) — populated by the
+ * connect flow in a follow-up. Until then, calls fail cleanly as not-connected.
+ */
 class FreeBridgeProxy implements McpProxyLike {
   async listTools(): Promise<McpTool[]> {
     return TOOLS;
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
-    if (name === 'freee_api_list_paths') {
-      return { content: [{ type: 'text', text: listAllAvailablePaths() }] };
-    }
-    // Token-backed calls require a connected freee app. Until the OAuth flow
-    // populates a usable token (follow-up PR), surface a clear error rather
-    // than calling freee with no credentials.
-    const ctx = await resolveTokenContext();
-    if (!ctx) throw new NotConnectedError();
-    if (name === 'freee_api_get') {
-      return makeApiRequest('GET', String(args.path), asRecord(args.query), undefined, undefined, ctx);
-    }
-    if (name === 'freee_api_post') {
-      return makeApiRequest('POST', String(args.path), undefined, asRecord(args.body), undefined, ctx);
-    }
-    throw new Error(`Unknown tool: ${name}`);
+  async callTool(): Promise<unknown> {
+    throw new NotConnectedError();
   }
 }
 
-function asRecord(v: unknown): Record<string, unknown> | undefined {
-  return v && typeof v === 'object' ? (v as Record<string, unknown>) : undefined;
-}
+const bridge = new ActionsBridge({ mcpServerUrl: 'inproc://freee' }, new FreeBridgeProxy());
 
-/**
- * Resolve a freee TokenContext from a connected FreeeConnection. Returns null
- * until the OAuth follow-up PR wires KMS decryption + refresh, so the bridge
- * deploys and lists tools today while freee calls fail cleanly.
- */
-async function resolveTokenContext(): Promise<undefined> {
-  return undefined;
-}
-
-async function validateApiKey(headers: Record<string, string | undefined>): Promise<boolean> {
-  const raw =
-    headers['x-api-key'] ?? headers['X-Api-Key'] ?? stripBearer(headers.authorization ?? headers.Authorization);
-  if (!raw || !APIKEY_TABLE) return false;
-  const hashedKey = createHash('sha256').update(raw).digest('hex');
-  const res = await ddb.send(
-    new ScanCommand({
-      TableName: APIKEY_TABLE,
-      FilterExpression: 'hashedKey = :h AND attribute_not_exists(revokedAt)',
-      ExpressionAttributeValues: { ':h': hashedKey },
-      Limit: 1,
-    }),
-  );
-  return (res.Count ?? 0) > 0;
+async function isAuthenticated(headers: Record<string, string | undefined>): Promise<boolean> {
+  const bearer = stripBearer(headers.authorization ?? headers.Authorization);
+  if (!bearer || !USER_POOL_ID) return false;
+  try {
+    await verifier.verify(bearer);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function stripBearer(v: string | undefined): string | undefined {
@@ -116,22 +88,21 @@ interface FnUrlEvent {
   body?: string;
 }
 
-const bridge = new ActionsBridge({ mcpServerUrl: 'inproc://free-mcp-core' }, new FreeBridgeProxy());
-
 export const handler = async (event: FnUrlEvent) => {
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = (event.rawPath ?? '/').replace(/\/+$/, '') || '/';
   const headers = event.headers ?? {};
 
-  // deny-by-default: every route requires a valid API key
-  if (!(await validateApiKey(headers))) {
-    return json(403, { error: 'Forbidden: valid API key required' });
+  // deny-by-default: every route requires a valid Cognito access token
+  if (!(await isAuthenticated(headers))) {
+    return json(401, { error: 'Unauthorized: Cognito sign-in required' });
   }
 
   if (method === 'GET' && path === '/tools') return respond(await bridge.listTools());
   if (method === 'POST' && path === '/call') return respond(await bridge.call(event.body ?? '{}'));
   if (method === 'GET' && path === '/openapi') {
-    const origin = headers['x-forwarded-host'] ? `https://${headers['x-forwarded-host']}` : 'https://bridge.example.com';
+    const host = headers['x-forwarded-host'];
+    const origin = host ? `https://${host}` : 'https://bridge.example.com';
     return respond(await bridge.openapi({ serverUrl: origin, title: 'freee GPT bridge' }));
   }
   return json(404, { error: 'Not found' });
