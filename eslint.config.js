@@ -47,4 +47,4 @@ export default defineConfig([{
             allowConstantExport: true,
         }],
     },
-}, globalIgnores(["**/dist"])]);
+}, globalIgnores(["**/dist", ".amplify", "amplify_outputs.json"])]);

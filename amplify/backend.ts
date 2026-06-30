@@ -1,7 +1,9 @@
 import { defineBackend } from '@aws-amplify/backend';
 import { CfnUserPoolGroup } from 'aws-cdk-lib/aws-cognito';
+import { FunctionUrlAuthType } from 'aws-cdk-lib/aws-lambda';
 import { auth } from './auth/resource';
 import { data } from './data/resource';
+import { bridge } from './functions/bridge/resource';
 
 /**
  * Deploy region: ap-northeast-1 (Tokyo). Amplify Gen2 takes the region from the
@@ -11,6 +13,7 @@ import { data } from './data/resource';
 const backend = defineBackend({
   auth,
   data,
+  bridge,
 });
 
 // Self sign-up DISABLED — operators are admin-created only.
@@ -32,8 +35,17 @@ backend.data.resources.cfnResources.amplifyDynamoDbTables['FreeeOAuthState'].tim
     enabled: true,
   };
 
-// NOTE (follow-up PR): freee OAuth Lambdas (state issuer + callback + set-secret
-// + rotate) and the bridge function (GET /tools / POST /call via free-actions-core)
-// are added here, with Function URLs, KMS for state/token encryption, and IAM
-// grants to the FreeeConnection table. Built from public sources only
-// (free-mcp-core / free-actions-core / standard OAuth + AWS SDK).
+// GPT-facing bridge: public Function URL. Auth is the in-handler Cognito JWT
+// check (deny-by-default) — GPT signs in via Cognito OAuth and sends a Bearer.
+const bridgeUrl = backend.bridge.resources.lambda.addFunctionUrl({
+  authType: FunctionUrlAuthType.NONE,
+});
+backend.bridge.addEnvironment('USER_POOL_ID', backend.auth.resources.userPool.userPoolId);
+backend.bridge.addEnvironment('CLIENT_ID', backend.auth.resources.userPoolClient.userPoolClientId);
+
+backend.addOutput({ custom: { bridgeUrl: bridgeUrl.url } });
+
+// NOTE (follow-up): the connect flow populates this app's own freee token
+// (KMS-encrypted in DynamoDB); the bridge then calls freee via fetch with that
+// token. Plus JP managed login (CDK) + first-admin bootstrap. Self-contained,
+// public sources only — no access to any other project.
