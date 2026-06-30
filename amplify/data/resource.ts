@@ -1,17 +1,45 @@
-import { type ClientSchema, a, defineData } from "@aws-amplify/backend";
+import { type ClientSchema, a, defineData } from '@aws-amplify/backend';
 
-/*== STEP 1 ===============================================================
-The section below creates a Todo database table with a "content" field. Try
-adding a new "isDone" field as a boolean. The authorization rule below
-specifies that any user authenticated via an API key can "create", "read",
-"update", and "delete" any "Todo" records.
-=========================================================================*/
+/**
+ * Data model for remote-free-actions (the GPT-trial bridge).
+ *
+ * Multi-connection by design: ONE operator can connect N freee apps
+ * (app-client-ids), each persisted as a separate `FreeeConnection` row. A
+ * freee token is per (app, freee-user); the company (顧問先) is NOT part of the
+ * key — it is a per-request selector (`currentCompanyId` / `companies[]`),
+ * mirroring remote-logic-solver-mcp.
+ *
+ * Key discipline (#807/#874): rows are keyed by Amplify's internal `id`, never
+ * by the external `clientId`. `clientId` is stored as data only. The
+ * client_secret is NOT stored here — only a Secrets Manager ARN reference.
+ */
 const schema = a.schema({
-  Todo: a
+  // One row per connected freee app.
+  FreeeConnection: a
     .model({
-      content: a.string(),
+      label: a.string().required(), // human label e.g. "会計 / 顧問先A"
+      clientId: a.string().required(), // freee app client_id (external data, not a key)
+      secretArn: a.string(), // Secrets Manager ARN holding client_secret
+      secretWrittenAt: a.datetime(), // for the 30-day rotation sweep
+      refreshTokenCipher: a.string(), // KMS-encrypted refresh_token
+      accessTokenCipher: a.string(), // KMS-encrypted access_token cache (#877)
+      accessTokenExpiresAt: a.datetime(),
+      currentCompanyId: a.string(), // selected 事業所 for this connection
+      companies: a.json(), // [{ id, name }] accessible by this token
+      status: a.string(), // 'connected' | 'needs_reauth' (null = connected)
+      tokenVersion: a.integer(), // optimistic-lock version (#878)
     })
-    .authorization((allow) => [allow.publicApiKey()]),
+    // Operator-only. Trial GPT users never touch this model; the bridge
+    // Lambda reads it via IAM (granted in backend.ts when functions land).
+    .authorization((allow) => [allow.group('app-admin')]),
+
+  // One-time OAuth state nonce (replay prevention, #905). TTL set in backend.ts.
+  FreeeOAuthState: a
+    .model({
+      jti: a.string().required(),
+      ttl: a.integer(), // epoch seconds (DynamoDB TTL attribute)
+    })
+    .authorization((allow) => [allow.group('app-admin')]),
 });
 
 export type Schema = ClientSchema<typeof schema>;
@@ -19,39 +47,6 @@ export type Schema = ClientSchema<typeof schema>;
 export const data = defineData({
   schema,
   authorizationModes: {
-    defaultAuthorizationMode: "apiKey",
-    // API Key is used for a.allow.public() rules
-    apiKeyAuthorizationMode: {
-      expiresInDays: 30,
-    },
+    defaultAuthorizationMode: 'userPool',
   },
 });
-
-/*== STEP 2 ===============================================================
-Go to your frontend source code. From your client-side code, generate a
-Data client to make CRUDL requests to your table. (THIS SNIPPET WILL ONLY
-WORK IN THE FRONTEND CODE FILE.)
-
-Using JavaScript or Next.js React Server Components, Middleware, Server 
-Actions or Pages Router? Review how to generate Data clients for those use
-cases: https://docs.amplify.aws/gen2/build-a-backend/data/connect-to-API/
-=========================================================================*/
-
-/*
-"use client"
-import { generateClient } from "aws-amplify/data";
-import type { Schema } from "@/amplify/data/resource";
-
-const client = generateClient<Schema>() // use this Data client for CRUDL requests
-*/
-
-/*== STEP 3 ===============================================================
-Fetch records from the database and use them in your frontend component.
-(THIS SNIPPET WILL ONLY WORK IN THE FRONTEND CODE FILE.)
-=========================================================================*/
-
-/* For example, in a React component, you can use this snippet in your
-  function's RETURN statement */
-// const { data: todos } = await client.models.Todo.list()
-
-// return <ul>{todos.map(todo => <li key={todo.id}>{todo.content}</li>)}</ul>
