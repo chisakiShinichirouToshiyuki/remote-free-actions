@@ -1,8 +1,15 @@
 import { defineAuth } from '@aws-amplify/backend';
 
 /**
- * Define and configure your auth resource
- * @see https://docs.amplify.aws/gen2/build-a-backend/auth
+ * Auth for the operator-facing 連携画面 (freee connection screen).
+ *
+ * Self sign-up is DISABLED — operators are created admin-only
+ * (`allowAdminCreateUserOnly = true`, set in backend.ts), mirroring
+ * remote-logic-solver-mcp. Trial GPT users do NOT authenticate here; they hit
+ * the bridge anonymously.
+ *
+ * Japanese / modern Managed Login (v2) is applied post-deploy via SDK
+ * (UpdateUserPoolDomain), per the team's established approach — not CDK.
  */
 export const auth = defineAuth({
   loginWith: {
