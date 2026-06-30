@@ -14,7 +14,6 @@ const backend = defineBackend({
 });
 
 // Self sign-up DISABLED — operators are admin-created only.
-// (mirror of remote-logic-solver-mcp)
 backend.auth.resources.cfnResources.cfnUserPool.adminCreateUserConfig = {
   allowAdminCreateUserOnly: true,
 };
@@ -26,7 +25,7 @@ new CfnUserPoolGroup(backend.auth.resources.userPool.stack, 'AppAdminGroup', {
   description: 'Operators who manage freee connections (連携画面)',
 });
 
-// DynamoDB TTL on the one-time OAuth state nonce table (replay prevention, #905).
+// DynamoDB TTL on the one-time OAuth state nonce table (replay prevention).
 backend.data.resources.cfnResources.amplifyDynamoDbTables['FreeeOAuthState'].timeToLiveAttribute =
   {
     attributeName: 'ttl',
@@ -36,4 +35,5 @@ backend.data.resources.cfnResources.amplifyDynamoDbTables['FreeeOAuthState'].tim
 // NOTE (follow-up PR): freee OAuth Lambdas (state issuer + callback + set-secret
 // + rotate) and the bridge function (GET /tools / POST /call via free-actions-core)
 // are added here, with Function URLs, KMS for state/token encryption, and IAM
-// grants to the FreeeConnection table. Mirrors remote-logic-solver-mcp.
+// grants to the FreeeConnection table. Built from public sources only
+// (free-mcp-core / free-actions-core / standard OAuth + AWS SDK).

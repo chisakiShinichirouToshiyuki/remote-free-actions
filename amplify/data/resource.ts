@@ -6,10 +6,9 @@ import { type ClientSchema, a, defineData } from '@aws-amplify/backend';
  * Multi-connection by design: ONE operator can connect N freee apps
  * (app-client-ids), each persisted as a separate `FreeeConnection` row. A
  * freee token is per (app, freee-user); the company (顧問先) is NOT part of the
- * key — it is a per-request selector (`currentCompanyId` / `companies[]`),
- * mirroring remote-logic-solver-mcp.
+ * key — it is a per-request selector (`currentCompanyId` / `companies[]`).
  *
- * Key discipline (#807/#874): rows are keyed by Amplify's internal `id`, never
+ * Key discipline: rows are keyed by Amplify's internal `id`, never
  * by the external `clientId`. `clientId` is stored as data only. The
  * client_secret is NOT stored here — only a Secrets Manager ARN reference.
  */
@@ -22,18 +21,18 @@ const schema = a.schema({
       secretArn: a.string(), // Secrets Manager ARN holding client_secret
       secretWrittenAt: a.datetime(), // for the 30-day rotation sweep
       refreshTokenCipher: a.string(), // KMS-encrypted refresh_token
-      accessTokenCipher: a.string(), // KMS-encrypted access_token cache (#877)
+      accessTokenCipher: a.string(), // KMS-encrypted access_token cache
       accessTokenExpiresAt: a.datetime(),
       currentCompanyId: a.string(), // selected 事業所 for this connection
       companies: a.json(), // [{ id, name }] accessible by this token
       status: a.string(), // 'connected' | 'needs_reauth' (null = connected)
-      tokenVersion: a.integer(), // optimistic-lock version (#878)
+      tokenVersion: a.integer(), // optimistic-lock version
     })
     // Operator-only. Trial GPT users never touch this model; the bridge
     // Lambda reads it via IAM (granted in backend.ts when functions land).
     .authorization((allow) => [allow.group('app-admin')]),
 
-  // One-time OAuth state nonce (replay prevention, #905). TTL set in backend.ts.
+  // One-time OAuth state nonce (replay prevention). TTL set in backend.ts.
   FreeeOAuthState: a
     .model({
       jti: a.string().required(),
