@@ -1,38 +1,64 @@
 import { type ClientSchema, a, defineData } from '@aws-amplify/backend';
 
 /**
- * Data model for remote-free-actions (the GPT-trial bridge).
+ * Data model for remote-free-actions (the GPT-trial bridge). Self-contained.
  *
- * Multi-connection by design: ONE operator can connect N freee apps
- * (app-client-ids), each persisted as a separate `FreeeConnection` row. A
- * freee token is per (app, freee-user); the company (顧問先) is NOT part of the
- * key — it is a per-request selector (`currentCompanyId` / `companies[]`).
+ * Storage principle: persist ONLY (a) data this app owns/authors and (b) the
+ * one OAuth grant that cannot be re-fetched (refresh_token). Anything freee can
+ * return on demand (companies, company names, user info) is fetched from the
+ * freee API, never stored. Identity/email lives in Cognito. company_id is a
+ * per-request selector, not stored.
  *
- * Key discipline: rows are keyed by Amplify's internal `id`, never
- * by the external `clientId`. `clientId` is stored as data only. The
- * client_secret is NOT stored here — only a Secrets Manager ARN reference.
+ * Relationships are explicit: User ↔ FreeeConnection is many-to-many (one app
+ * shared by several users) via the `UserConnection` join model.
+ *
+ * Key discipline: rows are keyed by Amplify's internal id / Cognito sub, never
+ * by external values (clientId, freee ids). client_secret is not stored here —
+ * only a Secrets Manager ARN reference.
  */
 const schema = a.schema({
-  // One row per connected freee app.
+  // One row per connected freee app (registered centrally by app-admin).
   FreeeConnection: a
     .model({
-      label: a.string().required(), // human label e.g. "会計 / 顧問先A"
-      clientId: a.string().required(), // freee app client_id (external data, not a key)
-      secretArn: a.string(), // Secrets Manager ARN holding client_secret
-      secretWrittenAt: a.datetime(), // for the 30-day rotation sweep
-      refreshTokenCipher: a.string(), // KMS-encrypted refresh_token
-      accessTokenCipher: a.string(), // KMS-encrypted access_token cache
-      accessTokenExpiresAt: a.datetime(),
-      currentCompanyId: a.string(), // selected 事業所 for this connection
-      companies: a.json(), // [{ id, name }] accessible by this token
-      status: a.string(), // 'connected' | 'needs_reauth' (null = connected)
+      label: a.string().required(), // app: display name e.g. "会計 / 顧問先A"
+      clientId: a.string().required(), // app config: freee app client_id (not a key)
+      secretArn: a.string(), // app: Secrets Manager ARN holding client_secret
+      secretWrittenAt: a.datetime(), // app: for the rotation sweep
+      refreshTokenCipher: a.string(), // source of truth: KMS-encrypted refresh_token
+      accessTokenCipher: a.string(), // cache: re-derivable via refresh
+      accessTokenExpiresAt: a.datetime(), // cache
+      status: a.enum(['connected', 'needs_reauth']),
       tokenVersion: a.integer(), // optimistic-lock version
+      accesses: a.hasMany('UserConnection', 'connectionId'),
+      // NOTE: companies / currentCompanyId are NOT stored — fetched from the
+      // freee API on demand; company_id is passed per request.
     })
-    // Operator-only. Trial GPT users never touch this model; the bridge
-    // Lambda reads it via IAM (granted in backend.ts when functions land).
+    .authorization((allow) => [allow.group('app-admin')]),
+
+  // App user ↔ allowed freee apps. Keyed by Cognito sub; email is NOT stored
+  // (Cognito is the source of truth — fetched via the admin Lambda for display).
+  User: a
+    .model({
+      userSub: a.string().required(),
+      accesses: a.hasMany('UserConnection', 'userId'),
+    })
+    .secondaryIndexes((index) => [index('userSub')])
+    .authorization((allow) => [allow.group('app-admin')]),
+
+  // Explicit many-to-many join: which user may use which freee app.
+  // app-admin manages it via the GUI; the bridge reads it over IAM.
+  UserConnection: a
+    .model({
+      userId: a.id().required(),
+      connectionId: a.id().required(),
+      user: a.belongsTo('User', 'userId'),
+      connection: a.belongsTo('FreeeConnection', 'connectionId'),
+      grantedBy: a.string(), // sub of the app-admin who granted it
+    })
     .authorization((allow) => [allow.group('app-admin')]),
 
   // One-time OAuth state nonce (replay prevention). TTL set in backend.ts.
+  // In practice read/written by the OAuth Lambda over IAM.
   FreeeOAuthState: a
     .model({
       jti: a.string().required(),

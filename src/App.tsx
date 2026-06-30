@@ -76,9 +76,6 @@ function ConnectionsScreen({ signOut }: { signOut?: () => void }) {
               {c.status === 'connected' ? '● 連携済' : '○ 未連携'}
             </span>
             <div style={{ fontSize: 12, color: '#666' }}>client_id: {c.clientId}</div>
-            {c.currentCompanyId ? (
-              <div style={{ fontSize: 12, color: '#666' }}>現在の事業所: {c.currentCompanyId}</div>
-            ) : null}
             <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
               <button type="button" onClick={() => setSecret(c)}>
                 client_secret を設定
