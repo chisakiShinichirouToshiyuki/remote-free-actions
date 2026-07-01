@@ -29,11 +29,15 @@ function ConnectionsScreen({ signOut }: { signOut?: () => void }) {
   }, []);
 
   async function addConnection() {
+    // Placeholder screen — the org-scoped org-admin GUI replaces this. orgId is
+    // required now that connections are org-scoped; prompt it here for now.
+    const orgId = window.prompt('組織 ID(orgId)');
+    if (!orgId) return;
     const label = window.prompt('接続ラベル(例: 会計 / 顧問先A)');
     if (!label) return;
     const clientId = window.prompt('freee アプリの client_id');
     if (!clientId) return;
-    await client.models.FreeeConnection.create({ label, clientId, status: 'needs_reauth' });
+    await client.models.FreeeConnection.create({ orgId, label, clientId, status: 'needs_reauth' });
   }
 
   async function removeConnection(id: string) {
