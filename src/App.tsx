@@ -3,6 +3,7 @@ import { Authenticator } from '@aws-amplify/ui-react';
 import '@aws-amplify/ui-react/styles.css';
 import { generateClient } from 'aws-amplify/data';
 import type { Schema } from '../amplify/data/resource';
+import { GptSetupGuide } from './GptSetupGuide';
 
 const client = generateClient<Schema>();
 
@@ -94,9 +95,34 @@ function ConnectionsScreen({ signOut }: { signOut?: () => void }) {
   );
 }
 
+function Shell({ signOut }: { signOut?: () => void }) {
+  const [view, setView] = useState<'connections' | 'guide'>('connections');
+  const tab = (active: boolean): React.CSSProperties => ({
+    padding: '6px 12px',
+    border: 'none',
+    borderBottom: active ? '2px solid #0a7' : '2px solid transparent',
+    background: 'none',
+    cursor: 'pointer',
+    fontWeight: active ? 600 : 400,
+  });
+  return (
+    <div>
+      <nav style={{ display: 'flex', gap: 8, borderBottom: '1px solid #eee', padding: '8px 16px' }}>
+        <button type="button" style={tab(view === 'connections')} onClick={() => setView('connections')}>
+          freee 連携
+        </button>
+        <button type="button" style={tab(view === 'guide')} onClick={() => setView('guide')}>
+          GPTs 設定ガイド
+        </button>
+      </nav>
+      {view === 'connections' ? <ConnectionsScreen signOut={signOut} /> : <GptSetupGuide />}
+    </div>
+  );
+}
+
 function App() {
   // hideSignUp: self sign-up is disabled (operators are admin-created).
-  return <Authenticator hideSignUp>{({ signOut }) => <ConnectionsScreen signOut={signOut} />}</Authenticator>;
+  return <Authenticator hideSignUp>{({ signOut }) => <Shell signOut={signOut} />}</Authenticator>;
 }
 
 export default App;
