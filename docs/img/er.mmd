@@ -1,0 +1,49 @@
+erDiagram
+    Org ||--o{ Membership : "orgId (memberships, 1-N)"
+    Org ||--o{ FreeeConnection : "orgId (connections)"
+    FreeeConnection ||--o{ UserConnection : "connectionId (accesses)"
+    Org {
+        ID id PK "auto"
+        string name "required"
+        enum status "active | suspended"
+        string suspendedReason "e.g. no_org_admin"
+        string createdBy "audit"
+        string updatedBy "audit"
+        datetime createdAt "auto"
+        datetime updatedAt "auto"
+    }
+    Membership {
+        string userSub PK "1 user = 1 org"
+        ID orgId FK "required, GSI"
+        enum role "org_admin | user"
+        enum status "active | inactive"
+        string createdBy "audit"
+        string updatedBy "audit"
+    }
+    FreeeConnection {
+        ID id PK "auto"
+        ID orgId FK "required, GSI"
+        string label "required"
+        string clientId "freee client_id"
+        string secretArn "Secrets Manager ARN"
+        string refreshTokenCipher "KMS cipher (truth)"
+        string accessTokenCipher "cache"
+        integer tokenVersion "optimistic lock"
+        enum status "connected | needs_reauth"
+        string createdBy "audit"
+        string updatedBy "audit"
+    }
+    UserConnection {
+        ID connectionId PK "FK"
+        string userSub PK "GSI"
+        enum status "active | inactive"
+        string createdBy "audit"
+        string updatedBy "audit"
+    }
+    FreeeOAuthState {
+        string jti PK "one-time nonce"
+        integer ttl "DynamoDB TTL"
+        enum status "active | inactive"
+        string createdBy "audit"
+        string updatedBy "audit"
+    }
