@@ -86,6 +86,8 @@ function callback(query: Record<string, string>) {
 }
 
 const FUTURE = Math.floor(Date.now() / 1000) + 600;
+const AT = 'AT-1'.repeat(8); // realistic token length (TOKEN_SHAPE requires >=16 chars)
+const RT = 'RT-1'.repeat(8);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -100,7 +102,7 @@ beforeEach(() => {
   });
   fetchMock.mockResolvedValue({
     ok: true,
-    json: async () => ({ access_token: 'AT-1', refresh_token: 'RT-1', expires_in: 3600 }),
+    json: async () => ({ access_token: AT, refresh_token: RT, expires_in: 3600 }),
   });
 });
 
@@ -143,11 +145,23 @@ describe('token persistence', () => {
     const conn = connections.get('conn-1');
     expect(conn?.status).toBe('connected');
     expect(conn?.tokenVersion).toBe(4);
-    expect(conn?.refreshTokenCipher).toBe(Buffer.from('enc(RT-1)@conn-1').toString('base64'));
-    expect(conn?.accessTokenCipher).toBe(Buffer.from('enc(AT-1)@conn-1').toString('base64'));
+    expect(conn?.refreshTokenCipher).toBe(Buffer.from(`enc(${RT})@conn-1`).toString('base64'));
+    expect(conn?.accessTokenCipher).toBe(Buffer.from(`enc(${AT})@conn-1`).toString('base64'));
     const row = JSON.stringify(conn);
-    expect(row).not.toContain('RT-1');
-    expect(row).not.toContain('AT-1');
+    expect(row).not.toContain(RT);
+    expect(row).not.toContain(AT);
+  });
+
+  it('malformed token material from freee (wrong type / shape) → 400, nothing persisted', async () => {
+    stateRows.set('s1', { jti: 's1', connectionId: 'conn-1', ttl: FUTURE });
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ access_token: 42, refresh_token: 'has spaces \n', expires_in: 'soon' }),
+    });
+
+    const res = await callback({ code: 'c1', state: 's1' });
+    expect(res.statusCode).toBe(400);
+    expect(connections.get('conn-1')?.refreshTokenCipher).toBeUndefined();
   });
 
   it('freee exchange failure → 400 with a generic message, nothing persisted', async () => {

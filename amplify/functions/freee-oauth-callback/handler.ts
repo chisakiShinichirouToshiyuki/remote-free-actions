@@ -29,6 +29,18 @@ async function consumeState(jti: string): Promise<string> {
   return consumed.connectionId as string;
 }
 
+// OAuth token material: printable ASCII, bounded length. Anything else from
+// the exchange response is treated as a broken/hostile reply and never
+// persisted (also the sanitization barrier for flows into KMS/DDB).
+const TOKEN_SHAPE = /^[\x21-\x7e]{16,4096}$/;
+
+function assertTokenLike(value: unknown, name: string): string {
+  if (typeof value !== 'string' || !TOKEN_SHAPE.test(value)) {
+    throw new CallbackError(`freee returned a malformed ${name}`);
+  }
+  return value;
+}
+
 async function exchangeCode(
   code: string,
   clientId: string,
@@ -47,7 +59,16 @@ async function exchangeCode(
     }),
   });
   if (!res.ok) throw new CallbackError(`freee token exchange failed (${res.status})`);
-  return (await res.json()) as { access_token: string; refresh_token: string; expires_in: number };
+  const raw = (await res.json()) as Record<string, unknown>;
+  const expiresIn = typeof raw.expires_in === 'number' ? raw.expires_in : Number.NaN;
+  if (!Number.isFinite(expiresIn) || expiresIn <= 0 || expiresIn > 24 * 3600) {
+    throw new CallbackError('freee returned a malformed expires_in');
+  }
+  return {
+    access_token: assertTokenLike(raw.access_token, 'access_token'),
+    refresh_token: assertTokenLike(raw.refresh_token, 'refresh_token'),
+    expires_in: expiresIn,
+  };
 }
 
 async function encrypt(plaintext: string, connectionId: string): Promise<string> {
