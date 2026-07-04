@@ -1,0 +1,10 @@
+flowchart TD
+    OA["org-admin"] -->|"addMember / setMemberRole / removeMember"| MA["membership-admin Lambda (front write path)"]
+    MA -->|"cross-org add / last org-admin removal"| Reject["REJECT (error)"]
+    MA -->|"ok: write via IAM"| Membership[(Membership)]
+    U["user"] -->|"read only"| Front["frontend (userPool)"]
+    Front -->|"read"| Membership
+    Console["AWS console / Cognito AdminDeleteUser|DeleteUser|AdminDisableUser (no pre/post Lambda hook)"] -->|"CloudTrail"| EB{{"EventBridge rule"}}
+    EB -->|"on delete/disable"| Recon["org-admin-reconciler (event-driven)"]
+    Recon -->|"reconcile vs enabled Cognito subs, prune danglers"| Membership
+    Recon -->|"active admins = 0 -> suspend"| Org[(Org.status)]
