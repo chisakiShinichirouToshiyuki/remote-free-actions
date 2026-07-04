@@ -18,8 +18,9 @@ Report security issues privately via GitHub's
 
 - Dependabot alerts + security updates + grouped version updates
 - Secret scanning + push protection
-- CodeQL strict profile: `security-extended` **and** `security-and-quality`
-  suites, on push, every PR, and weekly (`.github/codeql/codeql-config.yml`)
+- CodeQL maximum-strictness profile: `security-extended` + `security-and-quality`
+  + `security-experimental` suites **and** the GitHub Security Lab community
+  audit pack, blocking on every PR (`.github/codeql/codeql-config.yml`)
 - GitHub Actions pinned to full commit SHAs; workflows run with least-privilege
   `permissions` (deny-all default, per-job grants)
 - Branch protection on `main` (PR required, CI must pass, linear history, no force-push)
@@ -27,6 +28,20 @@ Report security issues privately via GitHub's
   `noImplicitReturns` on both the app and the Amplify backend
 - ESLint security rules (`eslint-plugin-security`, no dynamic code execution,
   `dangerouslySetInnerHTML` forbidden)
+
+## Alert handling policy (no false-positive dismissals)
+
+We deliberately run low-precision/experimental query suites. The trade-off is
+handled by **coding standard, not by triage**:
+
+- A CodeQL alert is **never dismissed as "false positive"**. If a query flags a
+  pattern, that pattern is *forbidden in this codebase* — rewrite the code so
+  the alert does not fire (clearer data flow, explicit validation, safer API).
+- Rationale: every "FP" is a place where a human (or the analyzer) cannot
+  locally prove safety. Rewriting to an obviously-safe shape is cheap here and
+  keeps the noisy suites permanently blocking; triage debt never accumulates.
+- The only acceptable dismissal is "used in tests" for a finding whose fixture
+  nature is explicit, and it must be justified in the PR description.
 
 ## Authorization invariants (enforced + tested)
 

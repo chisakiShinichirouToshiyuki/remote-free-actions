@@ -1,13 +1,29 @@
-# CodeQL config — strict-by-default for the auth/token surface.
+# CodeQL config — maximum-strictness profile, blocking on every PR.
 #
-# The workflow already passes `queries: security-extended`; adding the
-# security-and-quality suite here unions both (max coverage). Tests are scanned
-# too on purpose: hard-coded secrets / injection sinks in test fixtures are
-# findings we want, not noise, in a public repo.
-name: strict security profile
+# Suites (unioned):
+#   - security-extended       (workflow `queries:` input)
+#   - security-and-quality    (below)
+#   - security-experimental   (below; official experimental queries, low precision)
+# Packs:
+#   - GitHub Security Lab community audit pack for JS/TS (researcher-grade
+#     queries that never graduate into the official suites).
+#
+# False-positive policy (SECURITY.md "Alert handling policy"): alerts are NOT
+# dismissed as false positives. A pattern these queries flag is forbidden by
+# coding standard — rewrite the code so the pattern does not occur. That is why
+# the noisy suites are safe to keep blocking: noise converges to zero by
+# construction, not by triage.
+#
+# Tests are scanned on purpose: secrets / injection sinks in fixtures are
+# findings we want in a public repo, not noise.
+name: max strictness profile
 
 queries:
   - uses: security-and-quality
+  - uses: security-experimental
+
+packs:
+  - githubsecuritylab/codeql-javascript-queries
 
 paths:
   - src
@@ -17,5 +33,5 @@ paths-ignore:
   - '**/dist'
   - '.amplify'
 
-# No query-filters: filtering (even an `include`) narrows the union of the two
-# suites. Strict profile = run everything, triage in the alert UI instead.
+# No query-filters: filtering (even an `include`) narrows the union of the
+# suites. Max strictness = run everything.

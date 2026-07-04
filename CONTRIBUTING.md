@@ -39,6 +39,13 @@ To send us a pull request, please:
 GitHub provides additional document on [forking a repository](https://help.github.com/articles/fork-a-repo/) and
 [creating a pull request](https://help.github.com/articles/creating-a-pull-request/).
 
+### Coding standard: CodeQL-flagged patterns are forbidden
+
+This repo runs CodeQL with maximum strictness (experimental suites + audit
+packs) as a **blocking** PR check, and alerts are **not dismissed as false
+positives**. If CodeQL flags your code, rewrite it so the pattern does not
+occur — see "Alert handling policy" in [SECURITY.md](SECURITY.md).
+
 
 ## Finding contributions to work on
 Looking at the existing issues is a great way to find something to contribute on. As our projects, by default, use the default GitHub issue labels (enhancement/bug/duplicate/help wanted/invalid/question/wontfix), looking at any 'help wanted' issues is a great place to start.
