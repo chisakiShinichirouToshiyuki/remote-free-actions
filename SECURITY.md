@@ -18,5 +18,28 @@ Report security issues privately via GitHub's
 
 - Dependabot alerts + security updates + grouped version updates
 - Secret scanning + push protection
-- CodeQL (security-and-quality) on push, PR, and weekly
+- CodeQL strict profile: `security-extended` **and** `security-and-quality`
+  suites, on push, every PR, and weekly (`.github/codeql/codeql-config.yml`)
+- GitHub Actions pinned to full commit SHAs; workflows run with least-privilege
+  `permissions` (deny-all default, per-job grants)
 - Branch protection on `main` (PR required, CI must pass, linear history, no force-push)
+- TypeScript strict + `noUncheckedIndexedAccess` / `noImplicitOverride` /
+  `noImplicitReturns` on both the app and the Amplify backend
+- ESLint security rules (`eslint-plugin-security`, no dynamic code execution,
+  `dangerouslySetInnerHTML` forbidden)
+
+## Authorization invariants (enforced + tested)
+
+The auth/authz model is documented in [docs/data-model.md](docs/data-model.md).
+The load-bearing invariants are pinned as executable contracts in CI:
+
+- **Deny-by-default bridge**: the public Function URL handler returns 401 for
+  every route/method without a valid Cognito access token
+  (`amplify/functions/bridge/handler.test.ts`).
+- **One user = one org**: `Membership` PK = `userSub`; cross-org adds fail
+  (`amplify/functions/membership-admin/handler.test.ts`).
+- **An org never loses its last active org-admin** through the API; out-of-band
+  Cognito deletions are converged by the event-driven reconciler (org suspended
+  until an admin returns).
+- **Frontend is read-only** on the membership graph; all writes go through the
+  Membership-checked Lambda mutations.

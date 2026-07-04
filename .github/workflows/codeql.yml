@@ -1,31 +1,46 @@
+# CodeQL — strict profile for a public repo.
+#
+# - security-extended: broader security queries (lower-precision included on
+#   purpose; we prefer noisy-but-safe for the auth/token surface of this app).
+# - config file (.github/codeql/codeql-config.yml) adds the quality suite and
+#   scopes paths.
+# - Actions are pinned to full commit SHAs (supply-chain); Dependabot's
+#   github-actions ecosystem keeps the pins fresh.
+# - PRs to any branch are scanned, not just main, so alerts surface before merge.
 name: CodeQL
 
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
   schedule:
     - cron: '0 3 * * 1'
 
-permissions:
-  contents: read
-  security-events: write
+permissions: {}
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   analyze:
     name: Analyze (javascript-typescript)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3
         with:
           languages: javascript-typescript
-          queries: security-and-quality
+          queries: security-extended
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3
         with:
           category: '/language:javascript-typescript'

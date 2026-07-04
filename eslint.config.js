@@ -11,6 +11,7 @@ import {
 
 import tsParser from "@typescript-eslint/parser";
 import reactRefresh from "eslint-plugin-react-refresh";
+import security from "eslint-plugin-security";
 import js from "@eslint/js";
 
 import {
@@ -46,5 +47,22 @@ export default defineConfig([{
         "react-refresh/only-export-components": ["warn", {
             allowConstantExport: true,
         }],
+
+        // Security hardening (public repo, auth/token surface).
+        // Dynamic code execution: never acceptable in this codebase.
+        "no-eval": "error",
+        "no-implied-eval": "error",
+        "no-new-func": "error",
+        // React XSS sink: the app renders no rich text; any use is a bug.
+        "no-restricted-syntax": [
+            "error",
+            {
+                selector: "JSXAttribute[name.name='dangerouslySetInnerHTML']",
+                message: "XSS sink: this app must not render raw HTML.",
+            },
+        ],
+        // Timing-unsafe string comparison of secrets slips through reviews;
+        // secrets in this repo are compared only inside vetted libs (JWT verify).
+        "security/detect-possible-timing-attacks": "error",
     },
-}, globalIgnores(["**/dist", ".amplify", "amplify_outputs.json"])]);
+}, security.configs.recommended, globalIgnores(["**/dist", ".amplify", "amplify_outputs.json"])]);

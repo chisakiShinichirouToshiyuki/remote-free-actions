@@ -7,10 +7,14 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
     "skipLibCheck": true,
     "paths": {
       "$amplify/*": [
-        "../.amplify/generated/*"
+        "../.amplify/generated/*",
+        "./typecheck-stubs/*"
       ]
     }
   }

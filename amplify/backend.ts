@@ -35,11 +35,14 @@ new CfnUserPoolGroup(backend.auth.resources.userPool.stack, 'AppAdminGroup', {
 });
 
 // DynamoDB TTL on the one-time OAuth state nonce table (replay prevention).
-backend.data.resources.cfnResources.amplifyDynamoDbTables['FreeeOAuthState'].timeToLiveAttribute =
-  {
-    attributeName: 'ttl',
-    enabled: true,
-  };
+// Fail the synth loudly if the table key ever drifts from the model name —
+// a silently missing TTL would let replayed OAuth states live forever.
+const oauthStateTable = backend.data.resources.cfnResources.amplifyDynamoDbTables['FreeeOAuthState'];
+if (!oauthStateTable) throw new Error('FreeeOAuthState table not found: TTL would not be applied');
+oauthStateTable.timeToLiveAttribute = {
+  attributeName: 'ttl',
+  enabled: true,
+};
 
 // GPT-facing bridge: public Function URL. Auth is the in-handler Cognito JWT
 // check (deny-by-default) — GPT signs in via Cognito OAuth and sends a Bearer.
