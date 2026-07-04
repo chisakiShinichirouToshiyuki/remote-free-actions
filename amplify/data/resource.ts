@@ -1,4 +1,6 @@
 import { type ClientSchema, a, defineData } from '@aws-amplify/backend';
+import { freeeConnect } from '../functions/freee-connect/resource';
+import { freeeOauthCallback } from '../functions/freee-oauth-callback/resource';
 import { membershipAdmin } from '../functions/membership-admin/resource';
 import { orgAdminReconciler } from '../functions/org-admin-reconciler/resource';
 
@@ -128,9 +130,12 @@ const schema = a
 
     // OAuth state 一回限り nonce(replay 防止・TTL は backend.ts)。OAuth Lambda が IAM R/W。
     // PK=jti ⇒ 同一 nonce の二重発行を DDB で禁止。
+    // state の正本は本テーブル: jti は 256bit random、callback が conditional delete で
+    // 一回性を消費し connectionId を復元する(署名不要 — DDB lookup が改竄防止を兼ねる)。
     FreeeOAuthState: a
       .model({
         jti: a.string().required(),
+        connectionId: a.id(),
         ttl: a.integer(),
         status: a.enum(['active', 'inactive']),
         createdBy: a.string(),
@@ -162,11 +167,37 @@ const schema = a
       .returns(a.ref('Membership'))
       .handler(a.handler.function(membershipAdmin))
       .authorization((allow) => [allow.authenticated()]),
+
+    // freee connect(org-admin, Lambda 内 Membership 検証):
+    //  - registerFreeeApp: FreeeConnection 作成。client_secret は Secrets Manager に
+    //    格納し ARN のみ DDB(secretArn)。(orgId, clientId) 重複は orgId GSI で reject。
+    //  - startFreeeAuthorize: freee authorize URL を発行。state=256bit random jti を
+    //    FreeeOAuthState に保存(TTL)。callback(公開 Function URL)が消費する。
+    registerFreeeApp: a
+      .mutation()
+      .arguments({
+        orgId: a.id().required(),
+        label: a.string().required(),
+        clientId: a.string().required(),
+        clientSecret: a.string().required(),
+      })
+      .returns(a.ref('FreeeConnection'))
+      .handler(a.handler.function(freeeConnect))
+      .authorization((allow) => [allow.authenticated()]),
+    startFreeeAuthorize: a
+      .mutation()
+      .arguments({ connectionId: a.id().required() })
+      .returns(a.string()) // freee authorize URL
+      .handler(a.handler.function(freeeConnect))
+      .authorization((allow) => [allow.authenticated()]),
   })
-  // 日次 reconciler と membership-admin(front 書込)に data の IAM R/W を付与。
+  // 書込系 Lambda(reconciler / membership-admin / freee connect / OAuth callback)に
+  // data の IAM R/W を付与。
   .authorization((allow) => [
     allow.resource(orgAdminReconciler),
     allow.resource(membershipAdmin),
+    allow.resource(freeeConnect),
+    allow.resource(freeeOauthCallback),
   ]);
 
 export type Schema = ClientSchema<typeof schema>;

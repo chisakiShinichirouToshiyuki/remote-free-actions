@@ -1,13 +1,18 @@
 import { defineBackend } from '@aws-amplify/backend';
+import { ArnFormat } from 'aws-cdk-lib';
 import { ReadWriteType, Trail } from 'aws-cdk-lib/aws-cloudtrail';
 import { CfnUserPoolGroup } from 'aws-cdk-lib/aws-cognito';
 import { Rule } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction } from 'aws-cdk-lib/aws-events-targets';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import { Key } from 'aws-cdk-lib/aws-kms';
 import { FunctionUrlAuthType } from 'aws-cdk-lib/aws-lambda';
 import { auth } from './auth/resource';
 import { data } from './data/resource';
 import { bridge } from './functions/bridge/resource';
+import { freeeConnect } from './functions/freee-connect/resource';
+import { freeeOauthCallback } from './functions/freee-oauth-callback/resource';
+import { membershipAdmin } from './functions/membership-admin/resource';
 import { orgAdminReconciler } from './functions/org-admin-reconciler/resource';
 
 /**
@@ -20,6 +25,9 @@ const backend = defineBackend({
   data,
   bridge,
   orgAdminReconciler,
+  membershipAdmin,
+  freeeConnect,
+  freeeOauthCallback,
 });
 
 // Self sign-up DISABLED — operators are admin-created only.
@@ -106,7 +114,60 @@ if (!process.env.MANAGEMENT_EVENTS_TRAIL_ARN) {
   });
 }
 
-// NOTE (follow-up): the connect flow populates this app's own freee token
-// (KMS-encrypted in DynamoDB); the bridge then calls freee via fetch with that
-// token. Plus JP managed login (CDK) + first-admin bootstrap. Self-contained,
-// public sources only — no access to any other project.
+// ---------------------------------------------------------------------------
+// freee connect flow (#21): org-admin registers an app + runs OAuth; the
+// callback stores KMS-encrypted tokens on FreeeConnection.
+
+const connectStack = backend.freeeOauthCallback.resources.lambda.stack;
+
+// Token-encryption key. Alias carries the stack name — a fixed alias collides
+// across sandboxes/branches deployed into the same account.
+const tokenKey = new Key(connectStack, 'FreeeTokenKey', {
+  alias: `remote-free-actions-tokens-${connectStack.stackName}`,
+  description: 'Encrypts freee refresh/access tokens at rest (EncryptionContext: connectionId)',
+  enableKeyRotation: true,
+});
+tokenKey.grantEncrypt(backend.freeeOauthCallback.resources.lambda);
+
+// client_secret storage. Secret names are prefixed per-stack; grants are
+// scoped to that prefix, not to all secrets in the account.
+const secretPrefix = `remote-free-actions/${connectStack.stackName}`;
+const secretArnPattern = connectStack.formatArn({
+  service: 'secretsmanager',
+  resource: 'secret',
+  resourceName: `${secretPrefix}/*`,
+  arnFormat: ArnFormat.COLON_RESOURCE_NAME,
+});
+backend.freeeConnect.resources.lambda.addToRolePolicy(
+  new PolicyStatement({
+    actions: ['secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue'],
+    resources: [secretArnPattern],
+  }),
+);
+backend.freeeOauthCallback.resources.lambda.addToRolePolicy(
+  new PolicyStatement({
+    actions: ['secretsmanager:GetSecretValue'],
+    resources: [secretArnPattern],
+  }),
+);
+
+// Browser-facing OAuth redirect target. Public by design; safety = one-time
+// 256-bit state nonce consumed in DynamoDB (see the handler).
+const freeeCallbackUrl = backend.freeeOauthCallback.resources.lambda.addFunctionUrl({
+  authType: FunctionUrlAuthType.NONE,
+});
+
+const FREEE_ACCOUNTS_ORIGIN = 'https://accounts.secure.freee.co.jp';
+backend.freeeConnect.addEnvironment('FREEE_ACCOUNTS_ORIGIN', FREEE_ACCOUNTS_ORIGIN);
+backend.freeeConnect.addEnvironment('FREEE_CALLBACK_URL', freeeCallbackUrl.url);
+backend.freeeConnect.addEnvironment('SECRET_PREFIX', secretPrefix);
+backend.freeeOauthCallback.addEnvironment('FREEE_ACCOUNTS_ORIGIN', FREEE_ACCOUNTS_ORIGIN);
+backend.freeeOauthCallback.addEnvironment('TOKEN_KMS_KEY_ARN', tokenKey.keyArn);
+// NOTE: the callback cannot receive its own Function URL via env (circular);
+// it reconstructs redirect_uri from the Host header instead.
+
+backend.addOutput({ custom: { freeeCallbackUrl: freeeCallbackUrl.url } });
+
+// NOTE (follow-up): #22 wires the bridge to resolve caller→connection, decrypt
+// (grantDecrypt on tokenKey) and call freee. Plus JP managed login (CDK) +
+// first-admin bootstrap (#23/#24). Self-contained, public sources only.
