@@ -1,0 +1,21 @@
+# CodeQL config — strict-by-default for the auth/token surface.
+#
+# The workflow already passes `queries: security-extended`; adding the
+# security-and-quality suite here unions both (max coverage). Tests are scanned
+# too on purpose: hard-coded secrets / injection sinks in test fixtures are
+# findings we want, not noise, in a public repo.
+name: strict security profile
+
+queries:
+  - uses: security-and-quality
+
+paths:
+  - src
+  - amplify
+paths-ignore:
+  - '**/node_modules'
+  - '**/dist'
+  - '.amplify'
+
+# No query-filters: filtering (even an `include`) narrows the union of the two
+# suites. Strict profile = run everything, triage in the alert UI instead.

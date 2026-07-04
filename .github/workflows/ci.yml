@@ -5,23 +5,28 @@ on:
     branches: [main]
   pull_request:
 
-permissions:
-  contents: read
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
-    name: lint · backend typecheck
+    name: lint · typecheck · authz contract tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: npm
 
       # free-actions-core is a git dependency whose prepare build uses bun.
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: '1.3.10'
 
@@ -32,5 +37,10 @@ jobs:
 
       - name: Typecheck Amplify backend
         run: npm run typecheck:backend
+
+      # The auth/authz invariants (bridge deny-by-default, last-org-admin
+      # protection, one-org-per-user) are pinned as executable contracts.
+      - name: Authz contract tests
+        run: npm run test:run
 # NOTE: the frontend `vite build` needs the deploy-generated amplify_outputs.json,
 # so it runs on Amplify Hosting (ampx pipeline-deploy), not in this CI.
