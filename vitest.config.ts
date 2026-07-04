@@ -12,6 +12,12 @@ export default defineConfig({
       '$amplify/env/org-admin-reconciler': fileURLToPath(
         new URL('./amplify/typecheck-stubs/env/org-admin-reconciler.ts', import.meta.url),
       ),
+      '$amplify/env/freee-connect': fileURLToPath(
+        new URL('./amplify/typecheck-stubs/env/freee-connect.ts', import.meta.url),
+      ),
+      '$amplify/env/freee-oauth-callback': fileURLToPath(
+        new URL('./amplify/typecheck-stubs/env/freee-oauth-callback.ts', import.meta.url),
+      ),
     },
   },
   test: {
