@@ -33,11 +33,13 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      # All query suites live in the config file, NOT in a `queries:` input —
+      # a workflow-level `queries` (without a "+" prefix) silently OVERRIDES the
+      # config file's `queries` section, which would drop the extra suites.
       - name: Initialize CodeQL
         uses: github/codeql-action/init@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3
         with:
           languages: javascript-typescript
-          queries: security-extended
           config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL Analysis

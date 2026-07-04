@@ -1,9 +1,10 @@
 # CodeQL config — maximum-strictness profile, blocking on every PR.
 #
-# Suites (unioned):
-#   - security-extended       (workflow `queries:` input)
-#   - security-and-quality    (below)
-#   - security-experimental   (below; official experimental queries, low precision)
+# Suites (unioned; all three live HERE — a workflow-level `queries:` input
+# without a "+" prefix would silently override this section):
+#   - security-extended
+#   - security-and-quality
+#   - security-experimental   (official experimental queries, low precision)
 # Packs:
 #   - GitHub Security Lab community audit pack for JS/TS (researcher-grade
 #     queries that never graduate into the official suites).
@@ -19,6 +20,7 @@
 name: max strictness profile
 
 queries:
+  - uses: security-extended
   - uses: security-and-quality
   - uses: security-experimental
 
