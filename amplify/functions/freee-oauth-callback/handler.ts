@@ -87,8 +87,11 @@ export const handler = async (event: FnUrlEvent) => {
     if (!secret.SecretString) throw new CallbackError('client secret unreadable');
 
     // redirect_uri must match the authorize request — this Lambda's own URL.
+    // Not in the typed $amplify env (setting a function's own Function URL as
+    // its env would be circular in CFN); reconstructed from the Host header,
+    // with a plain-env override for tests / future proxying.
     const host = event.headers?.['x-forwarded-host'] ?? event.headers?.['host'];
-    const redirectUri = env.FREEE_CALLBACK_URL || (host ? `https://${host}/` : '');
+    const redirectUri = process.env.FREEE_CALLBACK_URL ?? (host ? `https://${host}/` : '');
 
     const tokens = await exchangeCode(code, conn.clientId, secret.SecretString, redirectUri);
 
