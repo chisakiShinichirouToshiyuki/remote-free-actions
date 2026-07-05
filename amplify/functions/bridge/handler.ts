@@ -170,30 +170,31 @@ async function getAccessToken(conn: Connection): Promise<string> {
       refresh_token: refreshToken,
     }),
   });
-  if (!res.ok) {
-    // The stored grant is dead (revoked / already rotated elsewhere). Flag the
-    // row so operators see it; do NOT retry with the same token.
-    await markNeedsReauth(conn.id);
-    throw new BridgeUserError('freee session expired — an org-admin must reconnect this app.');
-  }
-  const tokens = validateExchangeResponse((await res.json()) as Record<string, unknown>);
+  if (res.ok) {
+    const tokens = validateExchangeResponse((await res.json()) as Record<string, unknown>);
 
-  const [refreshCipher, accessCipher] = await Promise.all([
-    kmsEncryptToken(kms, env.TOKEN_KMS_KEY_ARN, tokens.refresh_token, conn.id),
-    kmsEncryptToken(kms, env.TOKEN_KMS_KEY_ARN, tokens.access_token, conn.id),
-  ]);
-  // Persist BEFORE first use — single-use rotation means an unstored refresh
-  // token is an unrecoverable loss.
-  await client.models.FreeeConnection.update({
-    id: conn.id,
-    refreshTokenCipher: refreshCipher,
-    accessTokenCipher: accessCipher,
-    accessTokenExpiresAt: new Date(now + tokens.expires_in * 1000).toISOString(),
-    status: 'connected',
-    tokenVersion: (conn.tokenVersion ?? 0) + 1,
-    updatedBy: 'bridge',
-  });
-  return tokens.access_token;
+    const [refreshCipher, accessCipher] = await Promise.all([
+      kmsEncryptToken(kms, env.TOKEN_KMS_KEY_ARN, tokens.refresh_token, conn.id),
+      kmsEncryptToken(kms, env.TOKEN_KMS_KEY_ARN, tokens.access_token, conn.id),
+    ]);
+    // Persist BEFORE first use — single-use rotation means an unstored refresh
+    // token is an unrecoverable loss.
+    await client.models.FreeeConnection.update({
+      id: conn.id,
+      refreshTokenCipher: refreshCipher,
+      accessTokenCipher: accessCipher,
+      accessTokenExpiresAt: new Date(now + tokens.expires_in * 1000).toISOString(),
+      status: 'connected',
+      tokenVersion: (conn.tokenVersion ?? 0) + 1,
+      updatedBy: 'bridge',
+    });
+    return tokens.access_token;
+  }
+
+  // The stored grant is dead (revoked / already rotated elsewhere). Flag the
+  // row so operators see it; do NOT retry with the same token.
+  await markNeedsReauth(conn.id);
+  throw new BridgeUserError('freee session expired — an org-admin must reconnect this app.');
 }
 
 const API_PATH = /^\/api\/1\/[A-Za-z0-9_\-/]*$/;
@@ -251,12 +252,16 @@ class FreeBridgeProxy implements McpProxyLike {
   }
 }
 
+// Cognito subs are UUIDs. Rejecting anything else keeps token claims from
+// flowing anywhere unvalidated (and is the taint barrier for JWT sources).
+const SUB_SHAPE = /^[0-9a-fA-F-]{8,64}$/;
+
 async function verifiedSub(headers: Record<string, string | undefined>): Promise<string | null> {
   const bearer = stripBearer(headers.authorization ?? headers.Authorization);
   if (!bearer || !env.USER_POOL_ID) return null;
   try {
     const payload = await verifier.verify(bearer);
-    return typeof payload.sub === 'string' ? payload.sub : null;
+    return typeof payload.sub === 'string' && SUB_SHAPE.test(payload.sub) ? payload.sub : null;
   } catch {
     return null;
   }

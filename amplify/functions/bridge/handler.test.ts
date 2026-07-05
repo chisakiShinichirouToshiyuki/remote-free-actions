@@ -97,6 +97,7 @@ vi.mock('@aws-amplify/backend/function/runtime', () => ({
 vi.mock('aws-amplify', () => ({ Amplify: { configure: () => {} } }));
 vi.mock('aws-amplify/data', () => ({ generateClient: () => ({ models }) }));
 
+const SUB = 'abcd1234-0000-4000-8000-000000000001'; // Cognito sub is a UUID (SUB_SHAPE guard)
 const fetchMock = vi.fn();
 vi.stubGlobal('fetch', fetchMock);
 
@@ -138,7 +139,7 @@ function callTool(tool: string, args: object) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  verify.mockResolvedValue({ sub: 'user-1' });
+  verify.mockResolvedValue({ sub: SUB });
   connections.clear();
   orgs.clear();
   grants.length = 0;
@@ -156,7 +157,7 @@ beforeEach(() => {
     status: 'connected',
     tokenVersion: 1,
   });
-  grants.push({ userSub: 'user-1', connectionId: 'conn-1' });
+  grants.push({ userSub: SUB, connectionId: 'conn-1' });
 
   fetchMock.mockResolvedValue({
     ok: true,
@@ -236,7 +237,7 @@ describe('freee call path', () => {
       refreshTokenCipher: cipher(RT, 'conn-2'),
       accessTokenCipher: cipher(AT, 'conn-2'),
     });
-    grants.push({ userSub: 'user-1', connectionId: 'conn-2' });
+    grants.push({ userSub: SUB, connectionId: 'conn-2' });
 
     const ambiguous = await callTool('freee_api_get', { path: '/api/1/companies' });
     expect(ambiguous.body).toContain('conn-1');
