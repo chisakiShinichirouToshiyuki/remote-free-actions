@@ -24,7 +24,8 @@ org 単位で接続された freee アプリを呼び出す。進捗の正本は
 | 1 | [#21](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/issues/21) | ~~freee connect~~ **完了** | — |
 | 2 | [#22](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/issues/22) | ~~bridge 実呼び出し~~ **完了** | — |
 | 3 | [#23](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/issues/23) | ~~GPT 用 Cognito OAuth 面~~ **完了**(callback URL の後入れのみ #25) | — |
-| 4 | [#12](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/issues/12) / [#13](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/issues/13) | org-admin の user 作成・user×app 割当(mutation + GUI) | 運用開始の前提 |
+| 4 | [#12](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/issues/12) | ~~email だけで user 発行 + 役割分離 GUI~~ **PR [#37](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/pull/37) レビュー待ち**(app-admin=組織管理/初期org-admin任命, org-admin=ユーザー管理。sub 貼付撤廃) | 運用開始の前提 |
+| 4b | [#13](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/issues/13) | user×app 割当(freee 設定「利用メンバー割当」)= 実装済(要 close 判断) | — |
 | 5 | [#24](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/issues/24) | first-admin bootstrap + Hosting IaC + README 実手順 | 第三者 deploy |
 | 6 | [#25](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/issues/25) | 人間の手作業チェックリスト(GPT 作成 / callback 登録 / repo 設定 2 クリック等) | 随時 |
 
