@@ -35,7 +35,6 @@ const FREEE_CALLBACK_URL =
   'https://<freee-callback-url>';
 
 type OrgRow = Schema['Org']['type'];
-type MemberRow = Schema['Membership']['type'];
 type ConnRow = {
   id: string;
   label: string;
@@ -45,6 +44,13 @@ type ConnRow = {
 };
 
 type Me = { sub: string; isAppAdmin: boolean; orgId: string | null; role: string | null };
+type OrgMember = { userSub: string; email: string; role: string | null; status: string };
+
+async function fetchOrgMembers(orgId: string): Promise<OrgMember[]> {
+  const { data, errors } = await client.queries.listOrgMembers({ orgId });
+  throwIfErrors(errors as { message: string }[] | undefined);
+  return (typeof data === 'string' ? JSON.parse(data) : data) as OrgMember[];
+}
 
 async function loadMe(): Promise<Me> {
   const session = await fetchAuthSession();
@@ -113,7 +119,7 @@ function CopyBox({ value }: { value: string }) {
 function FreeeSettingsPage({ me }: { me: Me }) {
   const orgId = me.orgId;
   const [conns, setConns] = useState<ConnRow[]>([]);
-  const [members, setMembers] = useState<MemberRow[]>([]);
+  const [members, setMembers] = useState<OrgMember[]>([]);
   const [error, run] = useAsyncError();
   const [form, setForm] = useState({ label: '', clientId: '', clientSecret: '' });
   const [refreshKey, setRefreshKey] = useState(0);
@@ -123,8 +129,7 @@ function FreeeSettingsPage({ me }: { me: Me }) {
     const { data, errors } = await client.queries.listOrgConnections({ orgId });
     throwIfErrors(errors as { message: string }[] | undefined);
     setConns((typeof data === 'string' ? JSON.parse(data) : data) as ConnRow[]);
-    const m = await client.models.Membership.listMembershipByOrgId({ orgId });
-    setMembers(m.data);
+    setMembers(await fetchOrgMembers(orgId));
     setRefreshKey((k) => k + 1);
   }, [orgId]);
 
@@ -241,13 +246,14 @@ function ConnectionSteps({
 }: {
   conn: ConnRow;
   refreshKey: number;
-  members: MemberRow[];
+  members: OrgMember[];
   onAuthorize: (id: string) => void;
   onGrant: (connectionId: string, userSub: string) => void;
   onChanged: () => void;
 }) {
   const [grants, setGrants] = useState<Schema['UserConnection']['type'][]>([]);
   const [selected, setSelected] = useState('');
+  const emailOf = (userSub: string) => members.find((m) => m.userSub === userSub)?.email ?? userSub;
 
   useEffect(() => {
     let alive = true;
@@ -304,7 +310,7 @@ function ConnectionSteps({
                 </Button>
               }
             >
-              <ListItemText slotProps={{ primary: { sx: { fontFamily: 'monospace', fontSize: 13 } } }} primary={g.userSub} />
+              <ListItemText slotProps={{ primary: { sx: { fontFamily: 'monospace', fontSize: 13 } } }} primary={emailOf(g.userSub)} />
             </ListItem>
           ))}
           {grants.length === 0 && (
@@ -326,7 +332,7 @@ function ConnectionSteps({
             <option value="">メンバーを選択…</option>
             {members.map((m) => (
               <option key={m.userSub} value={m.userSub}>
-                {m.userSub}({m.role})
+                {m.email}({m.role})
               </option>
             ))}
           </TextField>
@@ -391,15 +397,15 @@ function UsersPage({ me }: { me: Me }) {
 }
 
 function OrgCard({ org, onError }: { org: OrgRow; onError: (fn: () => Promise<void>) => Promise<void> }) {
-  const [members, setMembers] = useState<MemberRow[]>([]);
+  const [members, setMembers] = useState<OrgMember[]>([]);
   const [sub, setSub] = useState('');
   const [role, setRole] = useState<'org_admin' | 'user'>('org_admin');
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     let alive = true;
-    client.models.Membership.listMembershipByOrgId({ orgId: org.id }).then(({ data }) => {
-      if (alive) setMembers(data);
+    fetchOrgMembers(org.id).then((rows) => {
+      if (alive) setMembers(rows);
     });
     return () => {
       alive = false;

@@ -122,6 +122,16 @@ backend.orgAdminReconciler.addEnvironment(
   backend.auth.resources.userPool.userPoolId,
 );
 
+// membership-admin creates/looks up Cognito users by email (createOrgUser /
+// listOrgMembers) — invite mail is sent by Cognito's default mailer.
+backend.membershipAdmin.resources.lambda.addToRolePolicy(
+  new PolicyStatement({
+    actions: ['cognito-idp:AdminCreateUser', 'cognito-idp:AdminGetUser'],
+    resources: [backend.auth.resources.userPool.userPoolArn],
+  }),
+);
+backend.membershipAdmin.addEnvironment('USER_POOL_ID', backend.auth.resources.userPool.userPoolId);
+
 // Event-driven trigger (replaces a daily batch): fire the reconciler whenever a
 // Cognito user is deleted / disabled in THIS pool. These management API calls
 // are delivered to EventBridge via CloudTrail — this requires a CloudTrail trail
