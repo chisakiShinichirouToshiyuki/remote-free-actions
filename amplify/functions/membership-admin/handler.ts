@@ -11,8 +11,10 @@ const client = generateClient<Schema>({ authMode: 'iam' });
 type Role = 'org_admin' | 'user';
 
 interface Event {
-  info: { fieldName: 'addMember' | 'setMemberRole' | 'removeMember' };
-  arguments: { orgId?: string; userSub?: string; role?: Role };
+  info: {
+    fieldName: 'addMember' | 'setMemberRole' | 'removeMember' | 'grantConnection' | 'revokeConnection';
+  };
+  arguments: { orgId?: string; userSub?: string; role?: Role; connectionId?: string };
   identity?: { sub?: string; groups?: string[] | null } | null;
 }
 
@@ -104,6 +106,42 @@ export const handler = async (event: Event) => {
         }
       }
       const { data } = await client.models.Membership.delete({ userSub: a.userSub });
+      return data;
+    }
+
+    case 'grantConnection': {
+      if (!a.userSub || !a.connectionId) {
+        throw new RejectError('userSub and connectionId are required');
+      }
+      const { data: conn } = await client.models.FreeeConnection.get({ id: a.connectionId });
+      if (!conn) throw new RejectError('Connection not found');
+      await assertCanManage(caller, conn.orgId);
+      const { data: target } = await client.models.Membership.get({ userSub: a.userSub });
+      if (!target || target.orgId !== conn.orgId || target.status === 'inactive') {
+        throw new RejectError('Target user is not an active member of this org');
+      }
+      const { data, errors } = await client.models.UserConnection.create({
+        userSub: a.userSub,
+        connectionId: a.connectionId,
+        status: 'active',
+        createdBy: sub,
+        updatedBy: sub,
+      });
+      if (errors?.length) throw new RejectError('Already granted');
+      return data;
+    }
+
+    case 'revokeConnection': {
+      if (!a.userSub || !a.connectionId) {
+        throw new RejectError('userSub and connectionId are required');
+      }
+      const { data: conn } = await client.models.FreeeConnection.get({ id: a.connectionId });
+      if (!conn) throw new RejectError('Connection not found');
+      await assertCanManage(caller, conn.orgId);
+      const { data } = await client.models.UserConnection.delete({
+        connectionId: a.connectionId,
+        userSub: a.userSub,
+      });
       return data;
     }
 

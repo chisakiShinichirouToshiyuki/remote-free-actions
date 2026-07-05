@@ -84,7 +84,11 @@ const { handler } = await import('./handler');
 
 const ORG_ADMIN = 'admin-1';
 
-function call(fieldName: 'registerFreeeApp' | 'startFreeeAuthorize', args: object, sub = ORG_ADMIN) {
+function call(
+  fieldName: 'registerFreeeApp' | 'startFreeeAuthorize' | 'listOrgConnections',
+  args: object,
+  sub = ORG_ADMIN,
+) {
   return handler({
     info: { fieldName },
     arguments: args,
@@ -137,6 +141,26 @@ describe('registerFreeeApp', () => {
         'user-1',
       ),
     ).rejects.toThrow(/Forbidden/);
+  });
+});
+
+describe('listOrgConnections', () => {
+  it('returns ONLY sanitized columns — cipher/secret material never reaches the frontend', async () => {
+    await call('registerFreeeApp', { orgId: 'org-1', label: 'a', clientId: 'cid-1', clientSecret: 's' });
+    const conn = [...connections.values()][0] as Conn & Record<string, unknown>;
+    conn.refreshTokenCipher = 'CIPHER';
+    conn.accessTokenCipher = 'CIPHER2';
+
+    const rows = (await call('listOrgConnections', { orgId: 'org-1' })) as Record<string, unknown>[];
+    expect(rows).toHaveLength(1);
+    const row = rows[0] as Record<string, unknown>;
+    expect(Object.keys(row).sort()).toEqual(['clientId', 'id', 'label', 'secretWrittenAt', 'status']);
+    expect(JSON.stringify(rows)).not.toContain('CIPHER');
+  });
+
+  it('a plain member cannot list connections', async () => {
+    memberships.set('user-1', { orgId: 'org-1', role: 'user', status: 'active' });
+    await expect(call('listOrgConnections', { orgId: 'org-1' }, 'user-1')).rejects.toThrow(/Forbidden/);
   });
 });
 

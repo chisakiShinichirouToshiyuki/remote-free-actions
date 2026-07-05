@@ -15,7 +15,28 @@ type Row = {
 
 const db = new Map<string, Row>();
 
+const conns = new Map<string, { id: string; orgId: string }>();
+const ucs = new Map<string, { connectionId: string; userSub: string }>();
+const uckey = (c: string, u: string) => `${c}|${u}`;
+
 const models = {
+  FreeeConnection: {
+    get: vi.fn(async ({ id }: { id: string }) => ({ data: conns.get(id) ?? null })),
+  },
+  UserConnection: {
+    create: vi.fn(async (row: { connectionId: string; userSub: string }) => {
+      const k = uckey(row.connectionId, row.userSub);
+      if (ucs.has(k)) return { data: null, errors: [{ message: 'pk conflict' }] };
+      ucs.set(k, row);
+      return { data: row, errors: undefined };
+    }),
+    delete: vi.fn(async ({ connectionId, userSub }: { connectionId: string; userSub: string }) => {
+      const k = uckey(connectionId, userSub);
+      const cur = ucs.get(k) ?? null;
+      ucs.delete(k);
+      return { data: cur };
+    }),
+  },
   Membership: {
     get: vi.fn(async ({ userSub }: { userSub: string }) => ({ data: db.get(userSub) ?? null })),
     create: vi.fn(async (row: Row) => {
@@ -53,7 +74,7 @@ const { handler } = await import('./handler');
 type Args = { orgId?: string; userSub?: string; role?: 'org_admin' | 'user' };
 
 function call(
-  fieldName: 'addMember' | 'setMemberRole' | 'removeMember',
+  fieldName: 'addMember' | 'setMemberRole' | 'removeMember' | 'grantConnection' | 'revokeConnection',
   args: Args,
   caller: { sub: string; groups?: string[] },
 ) {
@@ -80,6 +101,9 @@ const MEMBER = { userSub: 'user-1', orgId: 'org-1', role: 'user', status: 'activ
 
 beforeEach(() => {
   vi.clearAllMocks();
+  conns.clear();
+  ucs.clear();
+  conns.set('conn-1', { id: 'conn-1', orgId: 'org-1' });
 });
 
 describe('one user = one org', () => {
@@ -169,5 +193,46 @@ describe('caller authorization', () => {
       handler({ info: { fieldName: 'removeMember' }, arguments: { userSub: ADMIN.userSub } }),
     ).rejects.toThrow(/Unauthorized/);
     expect(models.Membership.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe('grantConnection / revokeConnection (user × app 割当)', () => {
+  it('org-admin can grant a connection to a member of the SAME org', async () => {
+    seed([ADMIN, MEMBER]);
+    await call(
+      'grantConnection',
+      { userSub: MEMBER.userSub, connectionId: 'conn-1' },
+      { sub: ADMIN.userSub },
+    );
+    expect(ucs.has('conn-1|user-1')).toBe(true);
+  });
+
+  it('granting to a user of ANOTHER org is rejected', async () => {
+    seed([ADMIN, { userSub: 'stranger', orgId: 'org-9', role: 'user', status: 'active' }]);
+    await expect(
+      call('grantConnection', { userSub: 'stranger', connectionId: 'conn-1' }, { sub: ADMIN.userSub }),
+    ).rejects.toThrow(/not an active member/);
+  });
+
+  it('duplicate grant is rejected (composite PK)', async () => {
+    seed([ADMIN, MEMBER]);
+    await call('grantConnection', { userSub: MEMBER.userSub, connectionId: 'conn-1' }, { sub: ADMIN.userSub });
+    await expect(
+      call('grantConnection', { userSub: MEMBER.userSub, connectionId: 'conn-1' }, { sub: ADMIN.userSub }),
+    ).rejects.toThrow(/Already granted/);
+  });
+
+  it("an org-admin of another org cannot grant/revoke this org's connection", async () => {
+    seed([ADMIN, MEMBER, { userSub: 'other-admin', orgId: 'org-9', role: 'org_admin', status: 'active' }]);
+    await expect(
+      call('grantConnection', { userSub: MEMBER.userSub, connectionId: 'conn-1' }, { sub: 'other-admin' }),
+    ).rejects.toThrow(/Forbidden/);
+  });
+
+  it('revoke removes the grant', async () => {
+    seed([ADMIN, MEMBER]);
+    await call('grantConnection', { userSub: MEMBER.userSub, connectionId: 'conn-1' }, { sub: ADMIN.userSub });
+    await call('revokeConnection', { userSub: MEMBER.userSub, connectionId: 'conn-1' }, { sub: ADMIN.userSub });
+    expect(ucs.has('conn-1|user-1')).toBe(false);
   });
 });

@@ -19,7 +19,7 @@ const secrets = new SecretsManagerClient({});
 const STATE_TTL_SECONDS = 10 * 60;
 
 interface Event {
-  info: { fieldName: 'registerFreeeApp' | 'startFreeeAuthorize' };
+  info: { fieldName: 'registerFreeeApp' | 'startFreeeAuthorize' | 'listOrgConnections' };
   arguments: { orgId?: string; label?: string; clientId?: string; clientSecret?: string; connectionId?: string };
   identity?: { sub?: string; groups?: string[] | null } | null;
 }
@@ -111,6 +111,20 @@ export const handler = async (event: Event) => {
       url.searchParams.set('response_type', 'code');
       url.searchParams.set('state', jti);
       return url.toString();
+    }
+
+    case 'listOrgConnections': {
+      if (!a.orgId) throw new RejectError('orgId is required');
+      await assertCanManageOrg(client.models.Membership, caller, a.orgId);
+      const all = await listConnectionsByOrg(a.orgId);
+      // Sanitized on purpose: cipher columns and secret references stay server-side.
+      return all.map((c) => ({
+        id: c.id,
+        label: c.label,
+        clientId: c.clientId,
+        status: c.status ?? 'needs_reauth',
+        secretWrittenAt: c.secretWrittenAt ?? null,
+      }));
     }
 
     default:
