@@ -62,9 +62,14 @@ oauthStateTable.timeToLiveAttribute = {
 // globally unique per region → derived from the stack, overridable via
 // COGNITO_DOMAIN_PREFIX.
 const userPoolStack = backend.auth.resources.userPool.stack;
+// Derive from the ROOT stack name — a real string at synth time. The nested
+// stack's own name is an unresolved token; slicing it produced a DIFFERENT
+// garbage prefix every synth, which tried to replace the pool's single domain
+// on each deploy (Cognito: one domain per pool → InvalidRequest).
+const rootStackName = userPoolStack.nestedStackParent?.stackName ?? 'free-actions';
 const domainPrefix =
   process.env.COGNITO_DOMAIN_PREFIX ??
-  `free-actions-${userPoolStack.stackName.slice(-12).toLowerCase().replace(/[^a-z0-9-]/g, '')}`;
+  `free-actions-${rootStackName.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(-12)}`;
 const hostedDomain = backend.auth.resources.userPool.addDomain('GptHostedDomain', {
   cognitoDomain: { domainPrefix },
 });
