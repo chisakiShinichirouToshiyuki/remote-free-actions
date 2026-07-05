@@ -72,6 +72,7 @@ function ConnectionsPanel({ me }: { me: Me }) {
   const [members, setMembers] = useState<MemberRow[]>([]);
   const [error, run] = useAsyncError();
   const [form, setForm] = useState({ label: '', clientId: '', clientSecret: '' });
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const reload = useCallback(async () => {
     if (!orgId) return;
@@ -80,6 +81,7 @@ function ConnectionsPanel({ me }: { me: Me }) {
     setConns((typeof data === 'string' ? JSON.parse(data) : data) as ConnRow[]);
     const m = await client.models.Membership.listMembershipByOrgId({ orgId });
     setMembers(m.data);
+    setRefreshKey((k) => k + 1); // ConnectionCard の grants effect を再発火させる
   }, [orgId]);
 
   useEffect(() => {
@@ -158,6 +160,7 @@ function ConnectionsPanel({ me }: { me: Me }) {
         <ConnectionCard
           key={c.id}
           conn={c}
+          refreshKey={refreshKey}
           members={members}
           onAuthorize={authorize}
           onGrant={grant}
@@ -170,12 +173,14 @@ function ConnectionsPanel({ me }: { me: Me }) {
 
 function ConnectionCard({
   conn,
+  refreshKey,
   members,
   onAuthorize,
   onGrant,
   onChanged,
 }: {
   conn: ConnRow;
+  refreshKey: number;
   members: MemberRow[];
   onAuthorize: (id: string) => void;
   onGrant: (connectionId: string, userSub: string) => void;
@@ -201,7 +206,7 @@ function ConnectionCard({
     return () => {
       alive = false;
     };
-  }, [conn.id]);
+  }, [conn.id, refreshKey]);
 
   async function revoke(userSub: string) {
     await client.mutations.revokeConnection({ connectionId: conn.id, userSub });
