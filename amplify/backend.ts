@@ -128,6 +128,7 @@ const tokenKey = new Key(connectStack, 'FreeeTokenKey', {
   enableKeyRotation: true,
 });
 tokenKey.grantEncrypt(backend.freeeOauthCallback.resources.lambda);
+tokenKey.grantEncryptDecrypt(backend.bridge.resources.lambda); // decrypt to call freee, encrypt on rotation
 
 // client_secret storage. Secret names are prefixed per-stack; grants are
 // scoped to that prefix, not to all secrets in the account.
@@ -150,6 +151,12 @@ backend.freeeOauthCallback.resources.lambda.addToRolePolicy(
     resources: [secretArnPattern],
   }),
 );
+backend.bridge.resources.lambda.addToRolePolicy(
+  new PolicyStatement({
+    actions: ['secretsmanager:GetSecretValue'],
+    resources: [secretArnPattern],
+  }),
+);
 
 // Browser-facing OAuth redirect target. Public by design; safety = one-time
 // 256-bit state nonce consumed in DynamoDB (see the handler).
@@ -163,6 +170,9 @@ backend.freeeConnect.addEnvironment('FREEE_CALLBACK_URL', freeeCallbackUrl.url);
 backend.freeeConnect.addEnvironment('SECRET_PREFIX', secretPrefix);
 backend.freeeOauthCallback.addEnvironment('FREEE_ACCOUNTS_ORIGIN', FREEE_ACCOUNTS_ORIGIN);
 backend.freeeOauthCallback.addEnvironment('TOKEN_KMS_KEY_ARN', tokenKey.keyArn);
+backend.bridge.addEnvironment('FREEE_ACCOUNTS_ORIGIN', FREEE_ACCOUNTS_ORIGIN);
+backend.bridge.addEnvironment('FREEE_API_ORIGIN', 'https://api.freee.co.jp');
+backend.bridge.addEnvironment('TOKEN_KMS_KEY_ARN', tokenKey.keyArn);
 // NOTE: the callback cannot receive its own Function URL via env (circular);
 // it reconstructs redirect_uri from the Host header instead.
 
