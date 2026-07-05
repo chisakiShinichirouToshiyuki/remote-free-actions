@@ -20,6 +20,7 @@ import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { fetchAuthSession } from 'aws-amplify/auth';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { generateClient } from 'aws-amplify/data';
 import outputs from '../amplify_outputs.json';
 import type { Schema } from '../amplify/data/resource';
@@ -482,12 +483,27 @@ function OrgCard({ org, onError }: { org: OrgRow; onError: (fn: () => Promise<vo
 }
 
 // ---------------------------------------------------------------------------
+// URL 体系は logic-solver と同一: /page-id/<役割ページ>/top-menu-id/<メニュー>
+//   アプリ管理者   /page-id/app-admin/top-menu-id/user-management
+//   組織管理者     /page-id/organization-admin/top-menu-id/freee-settings
+//   一般ユーザー   /page-id/user-app/top-menu-id/gpt-guide
 
-type View = 'freee' | 'users' | 'guide';
+const PATHS = {
+  freee: '/page-id/organization-admin/top-menu-id/freee-settings',
+  users: '/page-id/app-admin/top-menu-id/user-management',
+  guide: '/page-id/user-app/top-menu-id/gpt-guide',
+} as const;
+
+const PAGE_META: Record<string, { id: string; breadcrumbs: string[] }> = {
+  [PATHS.freee]: { id: 'freee', breadcrumbs: ['組織管理者ページ', 'フリー設定'] },
+  [PATHS.users]: { id: 'users', breadcrumbs: ['アプリ管理者ページ', 'ユーザー管理'] },
+  [PATHS.guide]: { id: 'guide', breadcrumbs: ['ユーザーページ', 'GPTs 設定ガイド'] },
+};
 
 function Shell({ signOut }: { signOut?: () => void }) {
   const [me, setMe] = useState<Me | null>(null);
-  const [view, setView] = useState<View>('freee');
+  const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     void loadMe().then(setMe);
@@ -496,28 +512,36 @@ function Shell({ signOut }: { signOut?: () => void }) {
   if (!me) return <Typography sx={{ m: 4 }}>読み込み中…</Typography>;
 
   const topItems: SidebarItem[] = [
-    { id: 'freee', label: 'フリー設定', icon: <SettingsIcon fontSize="small" />, onClick: () => setView('freee') },
+    { id: 'freee', label: 'フリー設定', icon: <SettingsIcon fontSize="small" />, onClick: () => navigate(PATHS.freee) },
     ...(me.isAppAdmin
-      ? [{ id: 'users', label: 'ユーザー管理', icon: <GroupsIcon fontSize="small" />, onClick: () => setView('users') }]
+      ? [{ id: 'users', label: 'ユーザー管理', icon: <GroupsIcon fontSize="small" />, onClick: () => navigate(PATHS.users) }]
       : []),
-    { id: 'guide', label: 'GPTs ガイド', icon: <MenuBookIcon fontSize="small" />, onClick: () => setView('guide') },
+    { id: 'guide', label: 'GPTs ガイド', icon: <MenuBookIcon fontSize="small" />, onClick: () => navigate(PATHS.guide) },
   ];
   const bottomItems: SidebarItem[] = [
     { id: 'signout', label: 'サインアウト', icon: <LogoutIcon fontSize="small" />, onClick: () => signOut?.() },
   ];
 
-  const breadcrumbs =
-    view === 'freee'
-      ? ['組織管理者ページ', 'フリー設定']
-      : view === 'users'
-        ? ['アプリ管理者ページ', 'ユーザー管理']
-        : ['GPTs 設定ガイド'];
+  const meta = PAGE_META[location.pathname] ?? PAGE_META[PATHS.freee];
+  // 役割ごとの着地: app-admin → ユーザー管理 / org 所属 → フリー設定 / それ以外 → ガイド
+  const home = me.isAppAdmin ? PATHS.users : me.orgId ? PATHS.freee : PATHS.guide;
 
   return (
-    <AppShell topItems={topItems} bottomItems={bottomItems} activeItemId={view} breadcrumbs={breadcrumbs}>
-      {view === 'freee' && <FreeeSettingsPage me={me} />}
-      {view === 'users' && me.isAppAdmin && <UsersPage me={me} />}
-      {view === 'guide' && <GptSetupGuide />}
+    <AppShell
+      topItems={topItems}
+      bottomItems={bottomItems}
+      activeItemId={(meta as { id: string }).id}
+      breadcrumbs={(meta as { breadcrumbs: string[] }).breadcrumbs}
+    >
+      <Routes>
+        <Route path={PATHS.freee} element={<FreeeSettingsPage me={me} />} />
+        <Route
+          path={PATHS.users}
+          element={me.isAppAdmin ? <UsersPage me={me} /> : <Navigate to={home} replace />}
+        />
+        <Route path={PATHS.guide} element={<GptSetupGuide />} />
+        <Route path="*" element={<Navigate to={home} replace />} />
+      </Routes>
     </AppShell>
   );
 }
