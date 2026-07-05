@@ -7,6 +7,7 @@ export const env = process.env as unknown as {
   FREEE_ACCOUNTS_ORIGIN: string;
   FREEE_API_ORIGIN: string;
   TOKEN_KMS_KEY_ARN: string;
+  FREEE_CONNECTION_TABLE: string;
   AWS_ACCESS_KEY_ID: string;
   AWS_SECRET_ACCESS_KEY: string;
   AWS_SESSION_TOKEN: string;
