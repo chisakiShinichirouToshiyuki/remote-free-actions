@@ -1,4 +1,9 @@
 import { getAmplifyDataClientConfig } from '@aws-amplify/backend/function/runtime';
+import {
+  AdminCreateUserCommand,
+  AdminGetUserCommand,
+  CognitoIdentityProviderClient,
+} from '@aws-sdk/client-cognito-identity-provider';
 import { Amplify } from 'aws-amplify';
 import { generateClient } from 'aws-amplify/data';
 import type { Schema } from '../../data/resource';
@@ -7,10 +12,18 @@ import { env } from '$amplify/env/membership-admin';
 const { resourceConfig, libraryOptions } = await getAmplifyDataClientConfig(env);
 Amplify.configure(resourceConfig, libraryOptions);
 const client = generateClient<Schema>({ authMode: 'iam' });
+const cognito = new CognitoIdentityProviderClient({});
 
 type Role = 'org_admin' | 'user';
 
-type FieldName = 'addMember' | 'setMemberRole' | 'removeMember' | 'grantConnection' | 'revokeConnection';
+type FieldName =
+  | 'addMember'
+  | 'setMemberRole'
+  | 'removeMember'
+  | 'grantConnection'
+  | 'revokeConnection'
+  | 'createOrgUser'
+  | 'listOrgMembers';
 
 // Amplify Gen2 custom operations deliver fieldName at the TOP LEVEL of the
 // payload; the classic AppSync direct-resolver shape nests it under info.
@@ -18,7 +31,7 @@ type FieldName = 'addMember' | 'setMemberRole' | 'removeMember' | 'grantConnecti
 interface Event {
   fieldName?: FieldName;
   info?: { fieldName: FieldName };
-  arguments: { orgId?: string; userSub?: string; role?: Role; connectionId?: string };
+  arguments: { orgId?: string; userSub?: string; role?: Role; connectionId?: string; email?: string };
   identity?: { sub?: string; groups?: string[] | null } | null;
 }
 
@@ -112,6 +125,78 @@ export const handler = async (event: Event) => {
       }
       const { data } = await client.models.Membership.delete({ userSub: a.userSub });
       return data;
+    }
+
+    case 'createOrgUser': {
+      if (!a.orgId || !a.email) throw new RejectError('orgId and email are required');
+      await assertCanManage(caller, a.orgId);
+      const email = a.email.trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new RejectError('Invalid email');
+
+      let userSub: string | undefined;
+      try {
+        const created = await cognito.send(
+          new AdminCreateUserCommand({
+            UserPoolId: env.USER_POOL_ID,
+            Username: email,
+            UserAttributes: [
+              { Name: 'email', Value: email },
+              { Name: 'email_verified', Value: 'true' },
+            ],
+            // 招待メール(仮パスワード)を Cognito が送る(default)。
+          }),
+        );
+        userSub = created.User?.Attributes?.find((at) => at.Name === 'sub')?.Value;
+      } catch (e) {
+        if ((e as Error).name !== 'UsernameExistsException') throw e;
+        const existing = await cognito.send(
+          new AdminGetUserCommand({ UserPoolId: env.USER_POOL_ID, Username: email }),
+        );
+        userSub = existing.UserAttributes?.find((at) => at.Name === 'sub')?.Value;
+      }
+      if (!userSub) throw new RejectError('Could not resolve the Cognito user');
+
+      const { data, errors } = await client.models.Membership.create({
+        userSub,
+        orgId: a.orgId,
+        role: a.role ?? 'user',
+        status: 'active',
+        createdBy: sub,
+        updatedBy: sub,
+      });
+      if (errors?.length) {
+        throw new RejectError('User already belongs to an organization (one user = one org)');
+      }
+      return data;
+    }
+
+    case 'listOrgMembers': {
+      if (!a.orgId) throw new RejectError('orgId is required');
+      await assertCanManage(caller, a.orgId);
+      const rows = [];
+      let nextToken: string | undefined;
+      do {
+        const { data, nextToken: nt } = await client.models.Membership.listMembershipByOrgId(
+          { orgId: a.orgId },
+          { nextToken },
+        );
+        rows.push(...data);
+        nextToken = nt ?? undefined;
+      } while (nextToken);
+      return Promise.all(
+        rows.map(async (m) => {
+          let email = '';
+          try {
+            const u = await cognito.send(
+              new AdminGetUserCommand({ UserPoolId: env.USER_POOL_ID, Username: m.userSub }),
+            );
+            email = u.UserAttributes?.find((at) => at.Name === 'email')?.Value ?? '';
+          } catch {
+            email = '(削除済みユーザー)';
+          }
+          return { userSub: m.userSub, email, role: m.role, status: m.status ?? 'active' };
+        }),
+      );
     }
 
     case 'grantConnection': {

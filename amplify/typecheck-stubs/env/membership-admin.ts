@@ -3,6 +3,7 @@
 // actually receives) — a looser stub let an unadded env reference pass local
 // typecheck and fail at deploy.
 export const env = process.env as unknown as {
+  USER_POOL_ID: string;
 
   AWS_ACCESS_KEY_ID: string;
   AWS_SECRET_ACCESS_KEY: string;

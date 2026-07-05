@@ -215,6 +215,24 @@ const schema = a
       .returns(a.ref('UserConnection'))
       .handler(a.handler.function(membershipAdmin))
       .authorization((allow) => [allow.authenticated()]),
+
+    // user 作成を email で完結させる(Cognito console 手順の廃止)。
+    //  - createOrgUser: AdminCreateUser(招待メール送信)→ Membership 作成を 1 操作に。
+    //    既存 email は AdminGetUser で sub 解決して Membership のみ作成(1user=1org は
+    //    PK が拒否)。呼べるのは対象 org の org-admin か app-admin。
+    //  - listOrgMembers: Membership + Cognito email を合成して返す(GUI 表示用)。
+    createOrgUser: a
+      .mutation()
+      .arguments({ orgId: a.id().required(), email: a.string().required(), role: a.string() })
+      .returns(a.ref('Membership'))
+      .handler(a.handler.function(membershipAdmin))
+      .authorization((allow) => [allow.authenticated()]),
+    listOrgMembers: a
+      .query()
+      .arguments({ orgId: a.id().required() })
+      .returns(a.json()) // [{ userSub, email, role, status }]
+      .handler(a.handler.function(membershipAdmin))
+      .authorization((allow) => [allow.authenticated()]),
   })
   // 書込系 Lambda(reconciler / membership-admin / freee connect / OAuth callback)に
   // data の IAM R/W を付与。
