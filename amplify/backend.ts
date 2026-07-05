@@ -1,7 +1,7 @@
 import { defineBackend } from '@aws-amplify/backend';
 import { ArnFormat } from 'aws-cdk-lib';
 import { ReadWriteType, Trail } from 'aws-cdk-lib/aws-cloudtrail';
-import { CfnUserPoolGroup } from 'aws-cdk-lib/aws-cognito';
+import { CfnUserPoolGroup, OAuthScope } from 'aws-cdk-lib/aws-cognito';
 import { Rule } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction } from 'aws-cdk-lib/aws-events-targets';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
@@ -51,6 +51,48 @@ oauthStateTable.timeToLiveAttribute = {
   attributeName: 'ttl',
   enabled: true,
 };
+
+// ---------------------------------------------------------------------------
+// GPT Actions OAuth surface (#23): hosted-UI domain + a dedicated
+// authorization-code client with a secret (GPT Actions requires client_secret).
+//
+// The GPT's OAuth callback URL only exists AFTER the GPT is created, so it is
+// injected via env GPT_OAUTH_CALLBACK_URLS (comma-separated) and redeployed —
+// a placeholder keeps the client valid until then. Domain prefix must be
+// globally unique per region → derived from the stack, overridable via
+// COGNITO_DOMAIN_PREFIX.
+const userPoolStack = backend.auth.resources.userPool.stack;
+const domainPrefix =
+  process.env.COGNITO_DOMAIN_PREFIX ??
+  `free-actions-${userPoolStack.stackName.slice(-12).toLowerCase().replace(/[^a-z0-9-]/g, '')}`;
+const hostedDomain = backend.auth.resources.userPool.addDomain('GptHostedDomain', {
+  cognitoDomain: { domainPrefix },
+});
+const gptCallbackUrls = (process.env.GPT_OAUTH_CALLBACK_URLS ?? '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const gptClient = backend.auth.resources.userPool.addClient('GptActionsClient', {
+  generateSecret: true,
+  authFlows: { userPassword: false, userSrp: false },
+  oAuth: {
+    flows: { authorizationCodeGrant: true },
+    scopes: [OAuthScope.OPENID, OAuthScope.EMAIL, OAuthScope.PROFILE],
+    callbackUrls: gptCallbackUrls.length
+      ? gptCallbackUrls
+      : ['https://placeholder.invalid/oauth/callback'],
+  },
+});
+backend.addOutput({
+  custom: {
+    gptOAuth: {
+      authorizeUrl: `${hostedDomain.baseUrl()}/oauth2/authorize`,
+      tokenUrl: `${hostedDomain.baseUrl()}/oauth2/token`,
+      clientId: gptClient.userPoolClientId,
+      // client secret is NOT emitted — operators read it from the console/CLI.
+    },
+  },
+});
 
 // GPT-facing bridge: public Function URL. Auth is the in-handler Cognito JWT
 // check (deny-by-default) — GPT signs in via Cognito OAuth and sends a Bearer.

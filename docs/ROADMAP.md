@@ -21,9 +21,9 @@ org 単位で接続された freee アプリを呼び出す。進捗の正本は
 
 | # | issue | 内容 | ブロック関係 |
 |---|---|---|---|
-| 1 | [#21](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/issues/21) | freee connect(アプリ登録 + OAuth authorize/callback + KMS 保存) | #22 の前提 |
-| 2 | [#22](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/issues/22) | bridge: sub→許可 connection 解決→freee 実呼び出し + rotation | GPT が実データを読める最小到達点 |
-| 3 | [#23](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/issues/23) | GPT Actions 用 Cognito domain + OAuth client(IaC) | GPT 側 OAuth 設定の前提 |
+| 1 | [#21](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/issues/21) | ~~freee connect~~ **完了** | — |
+| 2 | [#22](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/issues/22) | ~~bridge 実呼び出し~~ **完了** | — |
+| 3 | [#23](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/issues/23) | ~~GPT 用 Cognito OAuth 面~~ **完了**(callback URL の後入れのみ #25) | — |
 | 4 | [#12](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/issues/12) / [#13](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/issues/13) | org-admin の user 作成・user×app 割当(mutation + GUI) | 運用開始の前提 |
 | 5 | [#24](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/issues/24) | first-admin bootstrap + Hosting IaC + README 実手順 | 第三者 deploy |
 | 6 | [#25](https://github.com/chisakiShinichirouToshiyuki/remote-free-actions/issues/25) | 人間の手作業チェックリスト(GPT 作成 / callback 登録 / repo 設定 2 クリック等) | 随時 |
@@ -32,7 +32,12 @@ org 単位で接続された freee アプリを呼び出す。進捗の正本は
 
 - AWS account `268428819595` / `ap-northeast-1` / stack `amplify-remotefreeactions-puff-sandbox`
 - DDB suffix (apiId) = `clx5oth7yrch7d7xdw753fzlha`
-- bridge Function URL = `https://64tpoqcqdjl775kuuudebbtzdi0bljyw.lambda-url.ap-northeast-1.on.aws/`
+- bridge Function URL = `https://r4gpjvzdrbl22wgp477pnqpoy40njtey.lambda-url.ap-northeast-1.on.aws/`
+  (bridge を data stack へ移設した際に URL 再生成。旧 64tpoqcq… は無効)
+- freee OAuth callback = `https://trpib36jiaxpzwifwtftuzdddy0yhdnb.lambda-url.ap-northeast-1.on.aws/`
+- GPT OAuth: authorize/token = `https://free-actions-ntoken42.auth.ap-northeast-1.amazoncognito.com/oauth2/{authorize,token}`,
+  client_id は amplify_outputs.json の custom.gptOAuth(secret は console/CLI で取得)。
+  GPT callback URL 判明後は branch env `GPT_OAUTH_CALLBACK_URLS` に設定して再 deploy
 - 検証コマンド: `npm run lint` / `npm run typecheck:backend` / `npm run test:run` /
   deploy は `npx ampx sandbox --identifier puff --once`(AWS_REGION=ap-northeast-1)
 
