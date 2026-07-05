@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
+import ApartmentIcon from '@mui/icons-material/Apartment';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import GroupsIcon from '@mui/icons-material/Groups';
 import LogoutIcon from '@mui/icons-material/Logout';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
+import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
 import SettingsIcon from '@mui/icons-material/Settings';
 import Alert from '@mui/material/Alert';
@@ -35,7 +37,6 @@ const FREEE_CALLBACK_URL =
   'https://<freee-callback-url>';
 
 type OrgRow = Schema['Org']['type'];
-type MemberRow = Schema['Membership']['type'];
 type ConnRow = {
   id: string;
   label: string;
@@ -45,6 +46,13 @@ type ConnRow = {
 };
 
 type Me = { sub: string; isAppAdmin: boolean; orgId: string | null; role: string | null };
+type OrgMember = { userSub: string; email: string; role: string | null; status: string };
+
+async function fetchOrgMembers(orgId: string): Promise<OrgMember[]> {
+  const { data, errors } = await client.queries.listOrgMembers({ orgId });
+  throwIfErrors(errors as { message: string }[] | undefined);
+  return (typeof data === 'string' ? JSON.parse(data) : data) as OrgMember[];
+}
 
 async function loadMe(): Promise<Me> {
   const session = await fetchAuthSession();
@@ -113,7 +121,7 @@ function CopyBox({ value }: { value: string }) {
 function FreeeSettingsPage({ me }: { me: Me }) {
   const orgId = me.orgId;
   const [conns, setConns] = useState<ConnRow[]>([]);
-  const [members, setMembers] = useState<MemberRow[]>([]);
+  const [members, setMembers] = useState<OrgMember[]>([]);
   const [error, run] = useAsyncError();
   const [form, setForm] = useState({ label: '', clientId: '', clientSecret: '' });
   const [refreshKey, setRefreshKey] = useState(0);
@@ -123,8 +131,7 @@ function FreeeSettingsPage({ me }: { me: Me }) {
     const { data, errors } = await client.queries.listOrgConnections({ orgId });
     throwIfErrors(errors as { message: string }[] | undefined);
     setConns((typeof data === 'string' ? JSON.parse(data) : data) as ConnRow[]);
-    const m = await client.models.Membership.listMembershipByOrgId({ orgId });
-    setMembers(m.data);
+    setMembers(await fetchOrgMembers(orgId));
     setRefreshKey((k) => k + 1);
   }, [orgId]);
 
@@ -241,13 +248,14 @@ function ConnectionSteps({
 }: {
   conn: ConnRow;
   refreshKey: number;
-  members: MemberRow[];
+  members: OrgMember[];
   onAuthorize: (id: string) => void;
   onGrant: (connectionId: string, userSub: string) => void;
   onChanged: () => void;
 }) {
   const [grants, setGrants] = useState<Schema['UserConnection']['type'][]>([]);
   const [selected, setSelected] = useState('');
+  const emailOf = (userSub: string) => members.find((m) => m.userSub === userSub)?.email ?? userSub;
 
   useEffect(() => {
     let alive = true;
@@ -304,7 +312,7 @@ function ConnectionSteps({
                 </Button>
               }
             >
-              <ListItemText slotProps={{ primary: { sx: { fontFamily: 'monospace', fontSize: 13 } } }} primary={g.userSub} />
+              <ListItemText slotProps={{ primary: { sx: { fontFamily: 'monospace', fontSize: 13 } } }} primary={emailOf(g.userSub)} />
             </ListItem>
           ))}
           {grants.length === 0 && (
@@ -326,7 +334,7 @@ function ConnectionSteps({
             <option value="">メンバーを選択…</option>
             {members.map((m) => (
               <option key={m.userSub} value={m.userSub}>
-                {m.userSub}({m.role})
+                {m.email}({m.role})
               </option>
             ))}
           </TextField>
@@ -340,9 +348,10 @@ function ConnectionSteps({
 }
 
 // ---------------------------------------------------------------------------
-// ユーザー管理(app-admin): 組織作成 + メンバー管理
+// 組織管理(app-admin): 組織を作成し、初期 org-admin を email で任命する。
+// メンバー(一般ユーザー)の日常管理は org-admin が「ユーザー管理」で行う。
 
-function UsersPage({ me }: { me: Me }) {
+function OrgsPage({ me }: { me: Me }) {
   const [orgs, setOrgs] = useState<OrgRow[]>([]);
   const [name, setName] = useState('');
   const [error, run] = useAsyncError();
@@ -374,7 +383,7 @@ function UsersPage({ me }: { me: Me }) {
       )}
       <Card variant="outlined" sx={{ mb: 3 }}>
         <CardContent>
-          <StepTitle icon={<GroupsIcon color="primary" />}>組織を作成</StepTitle>
+          <StepTitle icon={<ApartmentIcon color="primary" />}>組織を作成</StepTitle>
           <Stack direction="row" spacing={1}>
             <TextField size="small" label="組織名" placeholder="組織名" value={name} onChange={(e) => setName(e.target.value)} />
             <Button variant="outlined" onClick={createOrg} disabled={!name}>
@@ -384,41 +393,36 @@ function UsersPage({ me }: { me: Me }) {
         </CardContent>
       </Card>
       {orgs.map((o) => (
-        <OrgCard key={o.id} org={o} onError={run} />
+        <OrgAdminCard key={o.id} org={o} onError={run} />
       ))}
     </Box>
   );
 }
 
-function OrgCard({ org, onError }: { org: OrgRow; onError: (fn: () => Promise<void>) => Promise<void> }) {
-  const [members, setMembers] = useState<MemberRow[]>([]);
-  const [sub, setSub] = useState('');
-  const [role, setRole] = useState<'org_admin' | 'user'>('org_admin');
+// app-admin が org ごとに初期 org-admin を email で任命する。既存の org-admin を
+// 一覧表示し、未登録 email は招待メール送信 + Membership 作成を 1 操作で行う。
+function OrgAdminCard({ org, onError }: { org: OrgRow; onError: (fn: () => Promise<void>) => Promise<void> }) {
+  const [members, setMembers] = useState<OrgMember[]>([]);
+  const [email, setEmail] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     let alive = true;
-    client.models.Membership.listMembershipByOrgId({ orgId: org.id }).then(({ data }) => {
-      if (alive) setMembers(data);
+    fetchOrgMembers(org.id).then((rows) => {
+      if (alive) setMembers(rows);
     });
     return () => {
       alive = false;
     };
   }, [org.id, refreshKey]);
 
-  async function add() {
-    await onError(async () => {
-      const { errors } = await client.mutations.addMember({ orgId: org.id, userSub: sub, role });
-      throwIfErrors(errors as { message: string }[] | undefined);
-      setSub('');
-      setRefreshKey((k) => k + 1);
-    });
-  }
+  const admins = members.filter((m) => m.role === 'org_admin');
 
-  async function remove(userSub: string) {
+  async function appoint() {
     await onError(async () => {
-      const { errors } = await client.mutations.removeMember({ userSub });
+      const { errors } = await client.mutations.createOrgUser({ orgId: org.id, email: email.trim(), role: 'org_admin' });
       throwIfErrors(errors as { message: string }[] | undefined);
+      setEmail('');
       setRefreshKey((k) => k + 1);
     });
   }
@@ -434,47 +438,33 @@ function OrgCard({ org, onError }: { org: OrgRow; onError: (fn: () => Promise<vo
             </Typography>
           )}
         </Stack>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          組織管理者(以降のユーザー管理はこの管理者が行います)
+        </Typography>
         <List dense>
-          {members.map((m) => (
-            <ListItem
-              key={m.userSub}
-              secondaryAction={
-                <Button size="small" color="error" onClick={() => void remove(m.userSub)}>
-                  削除
-                </Button>
-              }
-            >
-              <ListItemText
-                slotProps={{ primary: { sx: { fontFamily: 'monospace', fontSize: 13 } } }}
-                primary={m.userSub}
-                secondary={m.role}
-              />
+          {admins.map((m) => (
+            <ListItem key={m.userSub}>
+              <ListItemText primary={m.email} secondary={m.status === 'deleted' ? '削除済み' : 'org-admin'} />
             </ListItem>
           ))}
+          {admins.length === 0 && (
+            <ListItem>
+              <ListItemText secondary="org-admin 未任命(GUI を使えません — 下で任命してください)" />
+            </ListItem>
+          )}
         </List>
         <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
           <TextField
             size="small"
-            label="Cognito user の sub"
-            placeholder="Cognito user の sub(console 発行 → 貼付)"
-            value={sub}
-            onChange={(e) => setSub(e.target.value)}
+            type="email"
+            label="メールアドレス"
+            placeholder="組織管理者のメールアドレス"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
             sx={{ width: 400 }}
           />
-          <TextField
-            select
-            size="small"
-            label="role"
-            value={role}
-            onChange={(e) => setRole(e.target.value as 'org_admin' | 'user')}
-            slotProps={{ select: { native: true } }}
-            sx={{ width: 140 }}
-          >
-            <option value="org_admin">org_admin</option>
-            <option value="user">user</option>
-          </TextField>
-          <Button variant="outlined" onClick={add} disabled={!sub}>
-            メンバー追加
+          <Button variant="outlined" startIcon={<PersonAddIcon />} onClick={appoint} disabled={!email.trim()}>
+            org-admin を任命
           </Button>
         </Stack>
       </CardContent>
@@ -483,20 +473,131 @@ function OrgCard({ org, onError }: { org: OrgRow; onError: (fn: () => Promise<vo
 }
 
 // ---------------------------------------------------------------------------
+// ユーザー管理(org-admin): 自組織のメンバーを email で追加/一覧/削除。
+// createOrgUser が招待メール送信 → Membership 作成を 1 操作で行う。
+
+function MembersPage({ me }: { me: Me }) {
+  const orgId = me.orgId;
+  const [members, setMembers] = useState<OrgMember[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState<'org_admin' | 'user'>('user');
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [error, run] = useAsyncError();
+
+  useEffect(() => {
+    if (!orgId) return;
+    let alive = true;
+    void run(async () => {
+      const rows = await fetchOrgMembers(orgId);
+      if (alive) {
+        setMembers(rows);
+        setLoaded(true);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [orgId, refreshKey, run]);
+
+  if (!orgId) return <Alert severity="info">組織に所属していません(app-admin に org-admin 任命を依頼してください)。</Alert>;
+
+  async function addUser() {
+    await run(async () => {
+      const { errors } = await client.mutations.createOrgUser({ orgId: orgId as string, email: email.trim(), role });
+      throwIfErrors(errors as { message: string }[] | undefined);
+      setEmail('');
+      setRefreshKey((k) => k + 1);
+    });
+  }
+
+  async function remove(userSub: string) {
+    await run(async () => {
+      const { errors } = await client.mutations.removeMember({ userSub });
+      throwIfErrors(errors as { message: string }[] | undefined);
+      setRefreshKey((k) => k + 1);
+    });
+  }
+
+  return (
+    <Box sx={{ maxWidth: 1100 }}>
+      {error && (
+        <Alert severity="error" sx={{ mb: 2, whiteSpace: 'pre-wrap' }}>
+          {error}
+        </Alert>
+      )}
+      <Card variant="outlined">
+        <CardContent>
+          <StepTitle icon={<GroupsIcon color="primary" />}>メンバー</StepTitle>
+          <List dense>
+            {members.map((m) => (
+              <ListItem
+                key={m.userSub}
+                secondaryAction={
+                  <Button size="small" color="error" onClick={() => void remove(m.userSub)}>
+                    削除
+                  </Button>
+                }
+              >
+                <ListItemText primary={m.email} secondary={m.status === 'deleted' ? '削除済み' : m.role} />
+              </ListItem>
+            ))}
+            {loaded && members.length === 0 && (
+              <ListItem>
+                <ListItemText secondary="メンバーがいません" />
+              </ListItem>
+            )}
+          </List>
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mt: 1 }}>
+            <TextField
+              size="small"
+              type="email"
+              label="メールアドレス"
+              placeholder="追加するメンバーのメールアドレス"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              sx={{ width: 400 }}
+            />
+            <TextField
+              select
+              size="small"
+              label="role"
+              value={role}
+              onChange={(e) => setRole(e.target.value as 'org_admin' | 'user')}
+              slotProps={{ select: { native: true } }}
+              sx={{ width: 140 }}
+            >
+              <option value="user">user</option>
+              <option value="org_admin">org_admin</option>
+            </TextField>
+            <Button variant="outlined" startIcon={<PersonAddIcon />} onClick={addUser} disabled={!email.trim()}>
+              ユーザーを追加
+            </Button>
+          </Stack>
+        </CardContent>
+      </Card>
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // URL 体系は logic-solver と同一: /page-id/<役割ページ>/top-menu-id/<メニュー>
-//   アプリ管理者   /page-id/app-admin/top-menu-id/user-management
+//   アプリ管理者   /page-id/app-admin/top-menu-id/org-management   … 組織管理のみ
 //   組織管理者     /page-id/organization-admin/top-menu-id/freee-settings
+//   組織管理者     /page-id/organization-admin/top-menu-id/user-management … ユーザー管理
 //   一般ユーザー   /page-id/user-app/top-menu-id/gpt-guide
 
 const PATHS = {
+  orgs: '/page-id/app-admin/top-menu-id/org-management',
   freee: '/page-id/organization-admin/top-menu-id/freee-settings',
-  users: '/page-id/app-admin/top-menu-id/user-management',
+  users: '/page-id/organization-admin/top-menu-id/user-management',
   guide: '/page-id/user-app/top-menu-id/gpt-guide',
 } as const;
 
 const PAGE_META: Record<string, { id: string; breadcrumbs: string[] }> = {
+  [PATHS.orgs]: { id: 'orgs', breadcrumbs: ['アプリ管理者ページ', '組織管理'] },
   [PATHS.freee]: { id: 'freee', breadcrumbs: ['組織管理者ページ', 'フリー設定'] },
-  [PATHS.users]: { id: 'users', breadcrumbs: ['アプリ管理者ページ', 'ユーザー管理'] },
+  [PATHS.users]: { id: 'users', breadcrumbs: ['組織管理者ページ', 'ユーザー管理'] },
   [PATHS.guide]: { id: 'guide', breadcrumbs: ['ユーザーページ', 'GPTs 設定ガイド'] },
 };
 
@@ -511,10 +612,16 @@ function Shell({ signOut }: { signOut?: () => void }) {
 
   if (!me) return <Typography sx={{ m: 4 }}>読み込み中…</Typography>;
 
+  const isOrgAdmin = me.role === 'org_admin' && !!me.orgId;
   const topItems: SidebarItem[] = [
-    { id: 'freee', label: 'フリー設定', icon: <SettingsIcon fontSize="small" />, onClick: () => navigate(PATHS.freee) },
     ...(me.isAppAdmin
-      ? [{ id: 'users', label: 'ユーザー管理', icon: <GroupsIcon fontSize="small" />, onClick: () => navigate(PATHS.users) }]
+      ? [{ id: 'orgs', label: '組織管理', icon: <ApartmentIcon fontSize="small" />, onClick: () => navigate(PATHS.orgs) }]
+      : []),
+    ...(isOrgAdmin
+      ? [
+          { id: 'freee', label: 'フリー設定', icon: <SettingsIcon fontSize="small" />, onClick: () => navigate(PATHS.freee) },
+          { id: 'users', label: 'ユーザー管理', icon: <GroupsIcon fontSize="small" />, onClick: () => navigate(PATHS.users) },
+        ]
       : []),
     { id: 'guide', label: 'GPTs ガイド', icon: <MenuBookIcon fontSize="small" />, onClick: () => navigate(PATHS.guide) },
   ];
@@ -522,9 +629,9 @@ function Shell({ signOut }: { signOut?: () => void }) {
     { id: 'signout', label: 'サインアウト', icon: <LogoutIcon fontSize="small" />, onClick: () => signOut?.() },
   ];
 
-  const meta = PAGE_META[location.pathname] ?? PAGE_META[PATHS.freee];
-  // 役割ごとの着地: app-admin → ユーザー管理 / org 所属 → フリー設定 / それ以外 → ガイド
-  const home = me.isAppAdmin ? PATHS.users : me.orgId ? PATHS.freee : PATHS.guide;
+  const meta = PAGE_META[location.pathname] ?? PAGE_META[PATHS.guide];
+  // 役割ごとの着地: app-admin → 組織管理 / org-admin → フリー設定 / それ以外 → ガイド
+  const home = me.isAppAdmin ? PATHS.orgs : isOrgAdmin ? PATHS.freee : PATHS.guide;
 
   return (
     <AppShell
@@ -534,11 +641,9 @@ function Shell({ signOut }: { signOut?: () => void }) {
       breadcrumbs={(meta as { breadcrumbs: string[] }).breadcrumbs}
     >
       <Routes>
-        <Route path={PATHS.freee} element={<FreeeSettingsPage me={me} />} />
-        <Route
-          path={PATHS.users}
-          element={me.isAppAdmin ? <UsersPage me={me} /> : <Navigate to={home} replace />}
-        />
+        <Route path={PATHS.orgs} element={me.isAppAdmin ? <OrgsPage me={me} /> : <Navigate to={home} replace />} />
+        <Route path={PATHS.freee} element={isOrgAdmin ? <FreeeSettingsPage me={me} /> : <Navigate to={home} replace />} />
+        <Route path={PATHS.users} element={isOrgAdmin ? <MembersPage me={me} /> : <Navigate to={home} replace />} />
         <Route path={PATHS.guide} element={<GptSetupGuide />} />
         <Route path="*" element={<Navigate to={home} replace />} />
       </Routes>
