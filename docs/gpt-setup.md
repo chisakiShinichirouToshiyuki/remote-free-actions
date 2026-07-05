@@ -10,8 +10,8 @@
 |---|---|
 | bridge Function URL | `https://r4gpjvzdrbl22wgp477pnqpoy40njtey.lambda-url.ap-northeast-1.on.aws/` |
 | OpenAPI | `GET {bridge}/openapi`(要 Cognito Bearer) |
-| Authorization URL | `https://free-actions-ntoken42.auth.ap-northeast-1.amazoncognito.com/oauth2/authorize` |
-| Token URL | `https://free-actions-ntoken42.auth.ap-northeast-1.amazoncognito.com/oauth2/token` |
+| Authorization URL | `https://free-actions-x-6235b9c26e.auth.ap-northeast-1.amazoncognito.com/oauth2/authorize` |
+| Token URL | `https://free-actions-x-6235b9c26e.auth.ap-northeast-1.amazoncognito.com/oauth2/token` |
 | Client ID | `6c4duunf2vmtavjftrig8o0cvc`(GptActionsClient) |
 | Client Secret | AWS console / `aws cognito-idp describe-user-pool-client` で取得(出力には含めない) |
 
@@ -20,10 +20,11 @@
 1. **事前: freee 接続(org-admin)**
    1. freee アプリストアでアプリ作成 → `client_id` / `client_secret` を控える
       (コールバック URL には `amplify_outputs.custom.freeeCallbackUrl` を登録)
-   2. AppSync mutation `registerFreeeApp(orgId, label, clientId, clientSecret)` を実行
-      (GUI 準備中のため当面 AppSync console / API から。org-admin 権限で)
-   3. `startFreeeAuthorize(connectionId)` → 返った URL をブラウザで開き freee 認可
-      → 「freee と接続しました」表示で `status=connected`
+   2. 連携画面(この app の GUI)に org-admin でサインイン → 「freee 連携」タブ →
+      表示名 / client_id / client_secret を入力して **登録**
+   3. 接続カードの **「freee 認可を開始」** → 別タブで freee 認可
+      → 「freee と接続しました」→ 「状態を更新」で ● 連携済
+   4. 同カードの **「利用メンバー」** で GPT 利用者に割当(未割当だと bridge が拒否)
 2. **Custom GPT 作成** → Configure → Actions → Create new action
 3. **OpenAPI スキーマ貼付**: `GET {bridge}/openapi` の JSON を Schema 欄へ
    (`servers[].url` が bridge URL であること)
