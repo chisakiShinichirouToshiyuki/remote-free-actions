@@ -1,0 +1,54 @@
+# DAST — OWASP ZAP baseline against the deployed public endpoints (bridge
+# Function URL + freee OAuth callback). GitHub has no hosted DAST; running ZAP
+# in Actions is the free standard. Baseline scan = passive + safe active
+# checks; endpoints are deny-by-default (401) so this primarily validates
+# headers / error surfaces / auth bypass regressions.
+#
+# Target URLs come from repo variables (Settings → Variables): DAST_BRIDGE_URL,
+# DAST_CALLBACK_URL. Skips gracefully when unset (fresh forks).
+name: DAST
+
+on:
+  schedule:
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  zap-baseline:
+    name: ZAP baseline (public endpoints)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write # ZAP action files an issue with findings
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: bridge
+            url_var: DAST_BRIDGE_URL
+          - name: freee-callback
+            url_var: DAST_CALLBACK_URL
+    steps:
+      - name: Resolve target
+        id: target
+        env:
+          URL: ${{ vars[matrix.url_var] }}
+        run: |
+          if [ -z "$URL" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::${{ matrix.url_var }} not set — skipping"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "url=$URL" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: ZAP baseline scan
+        if: steps.target.outputs.skip == 'false'
+        uses: zaproxy/action-baseline@7c4deb10e6261301961c86d65d54a516394f9aed # v0.14.0
+        with:
+          target: ${{ steps.target.outputs.url }}
+          issue_title: 'DAST(${{ matrix.name }}): ZAP baseline findings'
+          fail_action: false # weekly signal; triage via the filed issue
+          artifact_name: zap-${{ matrix.name }}
