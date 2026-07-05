@@ -95,10 +95,14 @@ async function resolveConnection(sub: string, requestedId: unknown): Promise<Con
 
   let id: string;
   if (typeof requestedId === 'string' && requestedId.length > 0) {
-    if (!ids.includes(requestedId)) {
+    // Select the CANONICAL id from the caller's grant list — the user string
+    // only picks an index and never flows further (provenance stays with the
+    // DB-sourced value; also the taint barrier for guarded sensitive actions).
+    const granted = ids.find((g) => g === requestedId);
+    if (!granted) {
       throw new BridgeUserError('connection_id is not among your assigned connections');
     }
-    id = requestedId;
+    id = granted;
   } else if (ids.length === 1 && ids[0]) {
     id = ids[0];
   } else {
