@@ -1,4 +1,5 @@
 import { type ClientSchema, a, defineData } from '@aws-amplify/backend';
+import { bridge } from '../functions/bridge/resource';
 import { freeeConnect } from '../functions/freee-connect/resource';
 import { freeeOauthCallback } from '../functions/freee-oauth-callback/resource';
 import { membershipAdmin } from '../functions/membership-admin/resource';
@@ -198,6 +199,9 @@ const schema = a
     allow.resource(membershipAdmin),
     allow.resource(freeeConnect),
     allow.resource(freeeOauthCallback),
+    // bridge: caller sub → UserConnection/FreeeConnection/Org 解決(read)+
+    // token rotation の永続化(mutate)。
+    allow.resource(bridge),
   ]);
 
 export type Schema = ClientSchema<typeof schema>;

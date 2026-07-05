@@ -1,9 +1,10 @@
 import { getAmplifyDataClientConfig } from '@aws-amplify/backend/function/runtime';
-import { EncryptCommand, KMSClient } from '@aws-sdk/client-kms';
+import { KMSClient } from '@aws-sdk/client-kms';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { Amplify } from 'aws-amplify';
 import { generateClient } from 'aws-amplify/data';
 import type { Schema } from '../../data/resource';
+import { kmsEncryptToken, validateExchangeResponse } from '../shared/freee-tokens';
 import { env } from '$amplify/env/freee-oauth-callback';
 
 const { resourceConfig, libraryOptions } = await getAmplifyDataClientConfig(env);
@@ -29,18 +30,6 @@ async function consumeState(jti: string): Promise<string> {
   return consumed.connectionId as string;
 }
 
-// OAuth token material: printable ASCII, bounded length. Anything else from
-// the exchange response is treated as a broken/hostile reply and never
-// persisted (also the sanitization barrier for flows into KMS/DDB).
-const TOKEN_SHAPE = /^[\x21-\x7e]{16,4096}$/;
-
-function assertTokenLike(value: unknown, name: string): string {
-  if (typeof value !== 'string' || !TOKEN_SHAPE.test(value)) {
-    throw new CallbackError(`freee returned a malformed ${name}`);
-  }
-  return value;
-}
-
 async function exchangeCode(
   code: string,
   clientId: string,
@@ -59,30 +48,7 @@ async function exchangeCode(
     }),
   });
   if (!res.ok) throw new CallbackError(`freee token exchange failed (${res.status})`);
-  const raw = (await res.json()) as Record<string, unknown>;
-  const expiresIn = typeof raw.expires_in === 'number' ? raw.expires_in : Number.NaN;
-  if (!Number.isFinite(expiresIn) || expiresIn <= 0 || expiresIn > 24 * 3600) {
-    throw new CallbackError('freee returned a malformed expires_in');
-  }
-  return {
-    access_token: assertTokenLike(raw.access_token, 'access_token'),
-    refresh_token: assertTokenLike(raw.refresh_token, 'refresh_token'),
-    expires_in: expiresIn,
-  };
-}
-
-async function encrypt(plaintext: string, connectionId: string): Promise<string> {
-  const out = await kms.send(
-    new EncryptCommand({
-      KeyId: env.TOKEN_KMS_KEY_ARN,
-      Plaintext: Buffer.from(plaintext, 'utf8'),
-      // Context binds ciphertext to its connection — a ciphertext copied onto
-      // another row fails to decrypt.
-      EncryptionContext: { connectionId },
-    }),
-  );
-  if (!out.CiphertextBlob) throw new CallbackError('KMS encrypt returned no ciphertext');
-  return Buffer.from(out.CiphertextBlob).toString('base64');
+  return validateExchangeResponse((await res.json()) as Record<string, unknown>);
 }
 
 function html(status: number, message: string) {
@@ -117,8 +83,8 @@ export const handler = async (event: FnUrlEvent) => {
     const tokens = await exchangeCode(code, conn.clientId, secret.SecretString, redirectUri);
 
     const [refreshCipher, accessCipher] = await Promise.all([
-      encrypt(tokens.refresh_token, connectionId),
-      encrypt(tokens.access_token, connectionId),
+      kmsEncryptToken(kms, env.TOKEN_KMS_KEY_ARN, tokens.refresh_token, connectionId),
+      kmsEncryptToken(kms, env.TOKEN_KMS_KEY_ARN, tokens.access_token, connectionId),
     ]);
 
     await client.models.FreeeConnection.update({

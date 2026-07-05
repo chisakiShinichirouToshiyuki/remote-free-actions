@@ -18,6 +18,9 @@ export default defineConfig({
       '$amplify/env/freee-oauth-callback': fileURLToPath(
         new URL('./amplify/typecheck-stubs/env/freee-oauth-callback.ts', import.meta.url),
       ),
+      '$amplify/env/bridge': fileURLToPath(
+        new URL('./amplify/typecheck-stubs/env/bridge.ts', import.meta.url),
+      ),
     },
   },
   test: {
