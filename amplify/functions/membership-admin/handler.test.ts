@@ -6,6 +6,51 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const cognitoUsers = new Map<string, { sub: string; email: string }>();
+let cognitoSeq = 0;
+vi.mock('@aws-sdk/client-cognito-identity-provider', () => ({
+  CognitoIdentityProviderClient: class {
+    send(cmd: { kind: string; input: { Username: string } }) {
+      const key = cmd.input.Username.toLowerCase();
+      if (cmd.kind === 'create') {
+        if (cognitoUsers.has(key)) {
+          const e = new Error('exists');
+          e.name = 'UsernameExistsException';
+          return Promise.reject(e);
+        }
+        const u = { sub: `cog-sub-${++cognitoSeq}`, email: key };
+        cognitoUsers.set(key, u);
+        return Promise.resolve({
+          User: { Attributes: [{ Name: 'sub', Value: u.sub }, { Name: 'email', Value: key }] },
+        });
+      }
+      const u = cognitoUsers.get(key) ?? [...cognitoUsers.values()].find((x) => x.sub === key);
+      if (!u) {
+        const e = new Error('not found');
+        e.name = 'UserNotFoundException';
+        return Promise.reject(e);
+      }
+      return Promise.resolve({
+        UserAttributes: [{ Name: 'sub', Value: u.sub }, { Name: 'email', Value: u.email }],
+      });
+    }
+  },
+  AdminCreateUserCommand: class {
+    kind = 'create';
+    input: unknown;
+    constructor(input: unknown) {
+      this.input = input;
+    }
+  },
+  AdminGetUserCommand: class {
+    kind = 'get';
+    input: unknown;
+    constructor(input: unknown) {
+      this.input = input;
+    }
+  },
+}));
+
 type Row = {
   userSub: string;
   orgId: string;
@@ -15,7 +60,28 @@ type Row = {
 
 const db = new Map<string, Row>();
 
+const conns = new Map<string, { id: string; orgId: string }>();
+const ucs = new Map<string, { connectionId: string; userSub: string }>();
+const uckey = (c: string, u: string) => `${c}|${u}`;
+
 const models = {
+  FreeeConnection: {
+    get: vi.fn(async ({ id }: { id: string }) => ({ data: conns.get(id) ?? null })),
+  },
+  UserConnection: {
+    create: vi.fn(async (row: { connectionId: string; userSub: string }) => {
+      const k = uckey(row.connectionId, row.userSub);
+      if (ucs.has(k)) return { data: null, errors: [{ message: 'pk conflict' }] };
+      ucs.set(k, row);
+      return { data: row, errors: undefined };
+    }),
+    delete: vi.fn(async ({ connectionId, userSub }: { connectionId: string; userSub: string }) => {
+      const k = uckey(connectionId, userSub);
+      const cur = ucs.get(k) ?? null;
+      ucs.delete(k);
+      return { data: cur };
+    }),
+  },
   Membership: {
     get: vi.fn(async ({ userSub }: { userSub: string }) => ({ data: db.get(userSub) ?? null })),
     create: vi.fn(async (row: Row) => {
@@ -50,10 +116,23 @@ vi.mock('aws-amplify/data', () => ({ generateClient: () => ({ models }) }));
 
 const { handler } = await import('./handler');
 
-type Args = { orgId?: string; userSub?: string; role?: 'org_admin' | 'user' };
+type Args = {
+  orgId?: string;
+  userSub?: string;
+  role?: 'org_admin' | 'user';
+  connectionId?: string;
+  email?: string;
+};
 
 function call(
-  fieldName: 'addMember' | 'setMemberRole' | 'removeMember',
+  fieldName:
+    | 'addMember'
+    | 'setMemberRole'
+    | 'removeMember'
+    | 'grantConnection'
+    | 'revokeConnection'
+    | 'createOrgUser'
+    | 'listOrgMembers',
   args: Args,
   caller: { sub: string; groups?: string[] },
 ) {
@@ -80,6 +159,10 @@ const MEMBER = { userSub: 'user-1', orgId: 'org-1', role: 'user', status: 'activ
 
 beforeEach(() => {
   vi.clearAllMocks();
+  conns.clear();
+  ucs.clear();
+  cognitoUsers.clear();
+  conns.set('conn-1', { id: 'conn-1', orgId: 'org-1' });
 });
 
 describe('one user = one org', () => {
@@ -169,5 +252,111 @@ describe('caller authorization', () => {
       handler({ info: { fieldName: 'removeMember' }, arguments: { userSub: ADMIN.userSub } }),
     ).rejects.toThrow(/Unauthorized/);
     expect(models.Membership.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe('grantConnection / revokeConnection (user × app 割当)', () => {
+  it('org-admin can grant a connection to a member of the SAME org', async () => {
+    seed([ADMIN, MEMBER]);
+    await call(
+      'grantConnection',
+      { userSub: MEMBER.userSub, connectionId: 'conn-1' },
+      { sub: ADMIN.userSub },
+    );
+    expect(ucs.has('conn-1|user-1')).toBe(true);
+  });
+
+  it('granting to a user of ANOTHER org is rejected', async () => {
+    seed([ADMIN, { userSub: 'stranger', orgId: 'org-9', role: 'user', status: 'active' }]);
+    await expect(
+      call('grantConnection', { userSub: 'stranger', connectionId: 'conn-1' }, { sub: ADMIN.userSub }),
+    ).rejects.toThrow(/not an active member/);
+  });
+
+  it('duplicate grant is rejected (composite PK)', async () => {
+    seed([ADMIN, MEMBER]);
+    await call('grantConnection', { userSub: MEMBER.userSub, connectionId: 'conn-1' }, { sub: ADMIN.userSub });
+    await expect(
+      call('grantConnection', { userSub: MEMBER.userSub, connectionId: 'conn-1' }, { sub: ADMIN.userSub }),
+    ).rejects.toThrow(/Already granted/);
+  });
+
+  it("an org-admin of another org cannot grant/revoke this org's connection", async () => {
+    seed([ADMIN, MEMBER, { userSub: 'other-admin', orgId: 'org-9', role: 'org_admin', status: 'active' }]);
+    await expect(
+      call('grantConnection', { userSub: MEMBER.userSub, connectionId: 'conn-1' }, { sub: 'other-admin' }),
+    ).rejects.toThrow(/Forbidden/);
+  });
+
+  it('revoke removes the grant', async () => {
+    seed([ADMIN, MEMBER]);
+    await call('grantConnection', { userSub: MEMBER.userSub, connectionId: 'conn-1' }, { sub: ADMIN.userSub });
+    await call('revokeConnection', { userSub: MEMBER.userSub, connectionId: 'conn-1' }, { sub: ADMIN.userSub });
+    expect(ucs.has('conn-1|user-1')).toBe(false);
+  });
+});
+
+describe('event shape compatibility', () => {
+  it('accepts the Amplify Gen2 payload where fieldName is TOP-LEVEL (not under info) — the deployed runtime shape', async () => {
+    seed([ADMIN]);
+    await handler({
+      fieldName: 'addMember',
+      arguments: { orgId: 'org-1', userSub: 'user-new' },
+      identity: { sub: ADMIN.userSub, groups: [] },
+    } as never);
+    expect(db.has('user-new')).toBe(true);
+  });
+});
+
+describe('createOrgUser (email で user 発行 → Membership を 1 操作で)', () => {
+  it('org-admin can create a NEW Cognito user by email and it joins the org', async () => {
+    seed([ADMIN]);
+    const res = (await call(
+      'createOrgUser',
+      { orgId: 'org-1', email: 'New.User@Example.com', role: 'user' },
+      { sub: ADMIN.userSub },
+    )) as { userSub: string; orgId: string };
+    expect(cognitoUsers.has('new.user@example.com')).toBe(true); // email は正規化される
+    expect(db.get(res.userSub)?.orgId).toBe('org-1');
+  });
+
+  it('an EXISTING Cognito email is resolved to its sub (no duplicate user) and only Membership is created', async () => {
+    seed([ADMIN]);
+    cognitoUsers.set('exists@example.com', { sub: 'cog-sub-exists', email: 'exists@example.com' });
+    await call('createOrgUser', { orgId: 'org-1', email: 'exists@example.com' }, { sub: ADMIN.userSub });
+    expect(db.get('cog-sub-exists')?.orgId).toBe('org-1');
+    expect(cognitoUsers.size).toBe(1);
+  });
+
+  it('a user who already belongs to another org is rejected (one user = one org)', async () => {
+    seed([ADMIN, { userSub: 'cog-sub-exists', orgId: 'org-9', role: 'user', status: 'active' }]);
+    cognitoUsers.set('exists@example.com', { sub: 'cog-sub-exists', email: 'exists@example.com' });
+    await expect(
+      call('createOrgUser', { orgId: 'org-1', email: 'exists@example.com' }, { sub: ADMIN.userSub }),
+    ).rejects.toThrow(/already belongs/);
+  });
+
+  it('a plain member cannot create users; malformed email is rejected', async () => {
+    seed([ADMIN, MEMBER]);
+    await expect(
+      call('createOrgUser', { orgId: 'org-1', email: 'x@example.com' }, { sub: MEMBER.userSub }),
+    ).rejects.toThrow(/Forbidden/);
+    await expect(
+      call('createOrgUser', { orgId: 'org-1', email: 'not-an-email' }, { sub: ADMIN.userSub }),
+    ).rejects.toThrow(/Invalid email/);
+  });
+});
+
+describe('listOrgMembers (email 合成)', () => {
+  it('returns members with their Cognito email; deleted users are labeled', async () => {
+    seed([ADMIN, MEMBER]);
+    cognitoUsers.set(ADMIN.userSub, { sub: ADMIN.userSub, email: 'admin@example.com' });
+    const rows = (await call('listOrgMembers', { orgId: 'org-1' }, { sub: ADMIN.userSub })) as {
+      userSub: string;
+      email: string;
+    }[];
+    const bySub = Object.fromEntries(rows.map((r) => [r.userSub, r.email]));
+    expect(bySub[ADMIN.userSub]).toBe('admin@example.com');
+    expect(bySub[MEMBER.userSub]).toBe('(削除済みユーザー)');
   });
 });

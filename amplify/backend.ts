@@ -1,13 +1,18 @@
 import { defineBackend } from '@aws-amplify/backend';
+import { ArnFormat } from 'aws-cdk-lib';
 import { ReadWriteType, Trail } from 'aws-cdk-lib/aws-cloudtrail';
-import { CfnUserPoolGroup } from 'aws-cdk-lib/aws-cognito';
+import { CfnUserPoolGroup, OAuthScope } from 'aws-cdk-lib/aws-cognito';
 import { Rule } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction } from 'aws-cdk-lib/aws-events-targets';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import { Key } from 'aws-cdk-lib/aws-kms';
 import { FunctionUrlAuthType } from 'aws-cdk-lib/aws-lambda';
 import { auth } from './auth/resource';
 import { data } from './data/resource';
 import { bridge } from './functions/bridge/resource';
+import { freeeConnect } from './functions/freee-connect/resource';
+import { freeeOauthCallback } from './functions/freee-oauth-callback/resource';
+import { membershipAdmin } from './functions/membership-admin/resource';
 import { orgAdminReconciler } from './functions/org-admin-reconciler/resource';
 
 /**
@@ -20,6 +25,9 @@ const backend = defineBackend({
   data,
   bridge,
   orgAdminReconciler,
+  membershipAdmin,
+  freeeConnect,
+  freeeOauthCallback,
 });
 
 // Self sign-up DISABLED — operators are admin-created only.
@@ -44,6 +52,53 @@ oauthStateTable.timeToLiveAttribute = {
   enabled: true,
 };
 
+// ---------------------------------------------------------------------------
+// GPT Actions OAuth surface (#23): hosted-UI domain + a dedicated
+// authorization-code client with a secret (GPT Actions requires client_secret).
+//
+// The GPT's OAuth callback URL only exists AFTER the GPT is created, so it is
+// injected via env GPT_OAUTH_CALLBACK_URLS (comma-separated) and redeployed —
+// a placeholder keeps the client valid until then. Domain prefix must be
+// globally unique per region → derived from the stack, overridable via
+// COGNITO_DOMAIN_PREFIX.
+const userPoolStack = backend.auth.resources.userPool.stack;
+// Derive from the ROOT stack name — a real string at synth time. The nested
+// stack's own name is an unresolved token; slicing it produced a DIFFERENT
+// garbage prefix every synth, which tried to replace the pool's single domain
+// on each deploy (Cognito: one domain per pool → InvalidRequest).
+const rootStackName = userPoolStack.nestedStackParent?.stackName ?? 'free-actions';
+const domainPrefix =
+  process.env.COGNITO_DOMAIN_PREFIX ??
+  `free-actions-${rootStackName.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(-12)}`;
+const hostedDomain = backend.auth.resources.userPool.addDomain('GptHostedDomain', {
+  cognitoDomain: { domainPrefix },
+});
+const gptCallbackUrls = (process.env.GPT_OAUTH_CALLBACK_URLS ?? '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const gptClient = backend.auth.resources.userPool.addClient('GptActionsClient', {
+  generateSecret: true,
+  authFlows: { userPassword: false, userSrp: false },
+  oAuth: {
+    flows: { authorizationCodeGrant: true },
+    scopes: [OAuthScope.OPENID, OAuthScope.EMAIL, OAuthScope.PROFILE],
+    callbackUrls: gptCallbackUrls.length
+      ? gptCallbackUrls
+      : ['https://placeholder.invalid/oauth/callback'],
+  },
+});
+backend.addOutput({
+  custom: {
+    gptOAuth: {
+      authorizeUrl: `${hostedDomain.baseUrl()}/oauth2/authorize`,
+      tokenUrl: `${hostedDomain.baseUrl()}/oauth2/token`,
+      clientId: gptClient.userPoolClientId,
+      // client secret is NOT emitted — operators read it from the console/CLI.
+    },
+  },
+});
+
 // GPT-facing bridge: public Function URL. Auth is the in-handler Cognito JWT
 // check (deny-by-default) — GPT signs in via Cognito OAuth and sends a Bearer.
 const bridgeUrl = backend.bridge.resources.lambda.addFunctionUrl({
@@ -66,6 +121,16 @@ backend.orgAdminReconciler.addEnvironment(
   'USER_POOL_ID',
   backend.auth.resources.userPool.userPoolId,
 );
+
+// membership-admin creates/looks up Cognito users by email (createOrgUser /
+// listOrgMembers) — invite mail is sent by Cognito's default mailer.
+backend.membershipAdmin.resources.lambda.addToRolePolicy(
+  new PolicyStatement({
+    actions: ['cognito-idp:AdminCreateUser', 'cognito-idp:AdminGetUser'],
+    resources: [backend.auth.resources.userPool.userPoolArn],
+  }),
+);
+backend.membershipAdmin.addEnvironment('USER_POOL_ID', backend.auth.resources.userPool.userPoolId);
 
 // Event-driven trigger (replaces a daily batch): fire the reconciler whenever a
 // Cognito user is deleted / disabled in THIS pool. These management API calls
@@ -106,7 +171,70 @@ if (!process.env.MANAGEMENT_EVENTS_TRAIL_ARN) {
   });
 }
 
-// NOTE (follow-up): the connect flow populates this app's own freee token
-// (KMS-encrypted in DynamoDB); the bridge then calls freee via fetch with that
-// token. Plus JP managed login (CDK) + first-admin bootstrap. Self-contained,
-// public sources only — no access to any other project.
+// ---------------------------------------------------------------------------
+// freee connect flow (#21): org-admin registers an app + runs OAuth; the
+// callback stores KMS-encrypted tokens on FreeeConnection.
+
+const connectStack = backend.freeeOauthCallback.resources.lambda.stack;
+
+// Token-encryption key. Alias carries the stack name — a fixed alias collides
+// across sandboxes/branches deployed into the same account.
+const tokenKey = new Key(connectStack, 'FreeeTokenKey', {
+  alias: `remote-free-actions-tokens-${connectStack.stackName}`,
+  description: 'Encrypts freee refresh/access tokens at rest (EncryptionContext: connectionId)',
+  enableKeyRotation: true,
+});
+tokenKey.grantEncrypt(backend.freeeOauthCallback.resources.lambda);
+tokenKey.grantEncryptDecrypt(backend.bridge.resources.lambda); // decrypt to call freee, encrypt on rotation
+
+// client_secret storage. Secret names are prefixed per-stack; grants are
+// scoped to that prefix, not to all secrets in the account.
+const secretPrefix = `remote-free-actions/${connectStack.stackName}`;
+const secretArnPattern = connectStack.formatArn({
+  service: 'secretsmanager',
+  resource: 'secret',
+  resourceName: `${secretPrefix}/*`,
+  arnFormat: ArnFormat.COLON_RESOURCE_NAME,
+});
+backend.freeeConnect.resources.lambda.addToRolePolicy(
+  new PolicyStatement({
+    actions: ['secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue'],
+    resources: [secretArnPattern],
+  }),
+);
+backend.freeeOauthCallback.resources.lambda.addToRolePolicy(
+  new PolicyStatement({
+    actions: ['secretsmanager:GetSecretValue'],
+    resources: [secretArnPattern],
+  }),
+);
+backend.bridge.resources.lambda.addToRolePolicy(
+  new PolicyStatement({
+    actions: ['secretsmanager:GetSecretValue'],
+    resources: [secretArnPattern],
+  }),
+);
+
+// Browser-facing OAuth redirect target. Public by design; safety = one-time
+// 256-bit state nonce consumed in DynamoDB (see the handler).
+const freeeCallbackUrl = backend.freeeOauthCallback.resources.lambda.addFunctionUrl({
+  authType: FunctionUrlAuthType.NONE,
+});
+
+const FREEE_ACCOUNTS_ORIGIN = 'https://accounts.secure.freee.co.jp';
+backend.freeeConnect.addEnvironment('FREEE_ACCOUNTS_ORIGIN', FREEE_ACCOUNTS_ORIGIN);
+backend.freeeConnect.addEnvironment('FREEE_CALLBACK_URL', freeeCallbackUrl.url);
+backend.freeeConnect.addEnvironment('SECRET_PREFIX', secretPrefix);
+backend.freeeOauthCallback.addEnvironment('FREEE_ACCOUNTS_ORIGIN', FREEE_ACCOUNTS_ORIGIN);
+backend.freeeOauthCallback.addEnvironment('TOKEN_KMS_KEY_ARN', tokenKey.keyArn);
+backend.bridge.addEnvironment('FREEE_ACCOUNTS_ORIGIN', FREEE_ACCOUNTS_ORIGIN);
+backend.bridge.addEnvironment('FREEE_API_ORIGIN', 'https://api.freee.co.jp');
+backend.bridge.addEnvironment('TOKEN_KMS_KEY_ARN', tokenKey.keyArn);
+// NOTE: the callback cannot receive its own Function URL via env (circular);
+// it reconstructs redirect_uri from the Host header instead.
+
+backend.addOutput({ custom: { freeeCallbackUrl: freeeCallbackUrl.url } });
+
+// NOTE (follow-up): #22 wires the bridge to resolve caller→connection, decrypt
+// (grantDecrypt on tokenKey) and call freee. Plus JP managed login (CDK) +
+// first-admin bootstrap (#23/#24). Self-contained, public sources only.

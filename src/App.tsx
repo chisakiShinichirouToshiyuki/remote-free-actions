@@ -1,132 +1,658 @@
-import { useEffect, useState } from 'react';
-import { Authenticator } from '@aws-amplify/ui-react';
-import '@aws-amplify/ui-react/styles.css';
+import { useCallback, useEffect, useState } from 'react';
+import ApartmentIcon from '@mui/icons-material/Apartment';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import GroupsIcon from '@mui/icons-material/Groups';
+import LogoutIcon from '@mui/icons-material/Logout';
+import MenuBookIcon from '@mui/icons-material/MenuBook';
+import PersonAddIcon from '@mui/icons-material/PersonAdd';
+import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
+import SettingsIcon from '@mui/icons-material/Settings';
+import Alert from '@mui/material/Alert';
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Card from '@mui/material/Card';
+import CardContent from '@mui/material/CardContent';
+import IconButton from '@mui/material/IconButton';
+import Link from '@mui/material/Link';
+import List from '@mui/material/List';
+import ListItem from '@mui/material/ListItem';
+import ListItemText from '@mui/material/ListItemText';
+import Stack from '@mui/material/Stack';
+import TextField from '@mui/material/TextField';
+import Typography from '@mui/material/Typography';
+import { fetchAuthSession } from 'aws-amplify/auth';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { generateClient } from 'aws-amplify/data';
+import outputs from '../amplify_outputs.json';
 import type { Schema } from '../amplify/data/resource';
 import { GptSetupGuide } from './GptSetupGuide';
+import { Providers } from './providers';
+import { AppShell, type SidebarItem } from './ui/AppShell';
 
 const client = generateClient<Schema>();
 
-type Connection = Schema['FreeeConnection']['type'];
+const FREEE_CALLBACK_URL =
+  (outputs as { custom?: { freeeCallbackUrl?: string } }).custom?.freeeCallbackUrl ??
+  'https://<freee-callback-url>';
 
-/**
- * 連携画面 (operator-facing). Self sign-up is disabled, so the Authenticator
- * hides the sign-up tab — operators are admin-created. Lists connected freee
- * apps and lets the operator add / connect / re-auth each one.
- *
- * NOTE: "client_secret を設定" and "freee 連携" call backend endpoints added in
- * the follow-up PR (set-freee-secret + freee-oauth-state/redirect). The list /
- * add / remove operations below are live against the FreeeConnection model.
- */
-function ConnectionsScreen({ signOut }: { signOut?: () => void }) {
-  const [connections, setConnections] = useState<Connection[]>([]);
+type OrgRow = Schema['Org']['type'];
+type ConnRow = {
+  id: string;
+  label: string;
+  clientId: string;
+  status: string;
+  secretWrittenAt: string | null;
+};
 
-  useEffect(() => {
-    const sub = client.models.FreeeConnection.observeQuery().subscribe({
-      next: (data) => setConnections([...data.items]),
-    });
-    return () => sub.unsubscribe();
+type Me = { sub: string; isAppAdmin: boolean; orgId: string | null; role: string | null };
+type OrgMember = { userSub: string; email: string; role: string | null; status: string };
+
+async function fetchOrgMembers(orgId: string): Promise<OrgMember[]> {
+  const { data, errors } = await client.queries.listOrgMembers({ orgId });
+  throwIfErrors(errors as { message: string }[] | undefined);
+  return (typeof data === 'string' ? JSON.parse(data) : data) as OrgMember[];
+}
+
+async function loadMe(): Promise<Me> {
+  const session = await fetchAuthSession();
+  const sub = session.tokens?.accessToken.payload.sub as string;
+  const groups = (session.tokens?.accessToken.payload['cognito:groups'] ?? []) as string[];
+  const { data: membership } = await client.models.Membership.get({ userSub: sub });
+  return {
+    sub,
+    isAppAdmin: groups.includes('app-admin'),
+    orgId: membership?.orgId ?? null,
+    role: membership?.role ?? null,
+  };
+}
+
+function useAsyncError(): [string | null, (fn: () => Promise<void>) => Promise<void>] {
+  const [error, setError] = useState<string | null>(null);
+  const run = useCallback(async (fn: () => Promise<void>) => {
+    setError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   }, []);
+  return [error, run];
+}
 
-  async function addConnection() {
-    // Placeholder screen — the org-scoped org-admin GUI replaces this. orgId is
-    // required now that connections are org-scoped; prompt it here for now.
-    const orgId = window.prompt('組織 ID(orgId)');
-    if (!orgId) return;
-    const label = window.prompt('接続ラベル(例: 会計 / 顧問先A)');
-    if (!label) return;
-    const clientId = window.prompt('freee アプリの client_id');
-    if (!clientId) return;
-    await client.models.FreeeConnection.create({ orgId, label, clientId, status: 'needs_reauth' });
-  }
+function throwIfErrors(errors: { message: string }[] | undefined | null) {
+  if (errors?.length) throw new Error(errors.map((e) => e.message).join('\n'));
+}
 
-  async function removeConnection(id: string) {
-    if (!window.confirm('この接続を削除しますか?')) return;
-    await client.models.FreeeConnection.delete({ id });
-  }
-
-  function setSecret(c: Connection) {
-    // TODO(follow-up PR): POST client_secret to set-freee-secret Lambda.
-    window.alert(`TODO: ${c.label} の client_secret を Secrets Manager に保存`);
-  }
-
-  function connect(c: Connection) {
-    // TODO(follow-up PR): issue KMS state → redirect to freee authorize URL.
-    window.alert(`TODO: ${c.label} を freee 連携(OAuth authorize へ)`);
-  }
-
+function StepTitle({ done, icon, children }: { done?: boolean; icon?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <main style={{ maxWidth: 760, margin: '2rem auto', fontFamily: 'system-ui' }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1>freee 連携</h1>
-        <button type="button" onClick={signOut}>
-          サインアウト
-        </button>
-      </header>
-      <p>
-        GPT お試し用に freee アプリを接続します。1つの操作者が複数アプリ(app-client-id)を
-        接続でき、各接続は所属する全顧問先(company_id)を切り替えて操作できます。
-      </p>
-      <button type="button" onClick={addConnection}>
-        + freee アプリを追加
-      </button>
-      <ul style={{ listStyle: 'none', padding: 0 }}>
-        {connections.map((c) => (
-          <li
-            key={c.id}
-            style={{ border: '1px solid #ddd', borderRadius: 8, padding: 12, margin: '8px 0' }}
-          >
-            <strong>{c.label}</strong>{' '}
-            <span style={{ color: c.status === 'connected' ? '#0a7' : '#c40' }}>
-              {c.status === 'connected' ? '● 連携済' : '○ 未連携'}
-            </span>
-            <div style={{ fontSize: 12, color: '#666' }}>client_id: {c.clientId}</div>
-            <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
-              <button type="button" onClick={() => setSecret(c)}>
-                client_secret を設定
-              </button>
-              <button type="button" onClick={() => connect(c)}>
-                freee 連携
-              </button>
-              <button type="button" onClick={() => removeConnection(c.id)}>
-                削除
-              </button>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </main>
+    <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
+      {icon ?? (done ? <CheckCircleIcon color="success" /> : <SettingsIcon color="primary" />)}
+      <Typography variant="h6">{children}</Typography>
+    </Stack>
   );
 }
 
-function Shell({ signOut }: { signOut?: () => void }) {
-  const [view, setView] = useState<'connections' | 'guide'>('connections');
-  const tab = (active: boolean): React.CSSProperties => ({
-    padding: '6px 12px',
-    border: 'none',
-    borderBottom: active ? '2px solid #0a7' : '2px solid transparent',
-    background: 'none',
-    cursor: 'pointer',
-    fontWeight: active ? 600 : 400,
-  });
+function CopyBox({ value }: { value: string }) {
   return (
-    <div>
-      <nav style={{ display: 'flex', gap: 8, borderBottom: '1px solid #eee', padding: '8px 16px' }}>
-        <button type="button" style={tab(view === 'connections')} onClick={() => setView('connections')}>
-          freee 連携
-        </button>
-        <button type="button" style={tab(view === 'guide')} onClick={() => setView('guide')}>
-          GPTs 設定ガイド
-        </button>
-      </nav>
-      {view === 'connections' ? <ConnectionsScreen signOut={signOut} /> : <GptSetupGuide />}
-    </div>
+    <Stack
+      direction="row"
+      sx={{
+        alignItems: 'center',
+        bgcolor: 'grey.100',
+        borderRadius: 1,
+        pl: 1.5,
+        pr: 0.5,
+        py: 0.5,
+        justifyContent: 'space-between',
+      }}
+    >
+      <Typography sx={{ fontFamily: 'monospace', fontSize: 14, wordBreak: 'break-all' }}>{value}</Typography>
+      <IconButton size="small" aria-label="コピー" onClick={() => void navigator.clipboard.writeText(value)}>
+        <ContentCopyIcon fontSize="small" />
+      </IconButton>
+    </Stack>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// フリー設定(org-admin): 手順1 アプリ設定 → 手順2 認可 → 手順3 利用メンバー
+
+function FreeeSettingsPage({ me }: { me: Me }) {
+  const orgId = me.orgId;
+  const [conns, setConns] = useState<ConnRow[]>([]);
+  const [members, setMembers] = useState<OrgMember[]>([]);
+  const [error, run] = useAsyncError();
+  const [form, setForm] = useState({ label: '', clientId: '', clientSecret: '' });
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  const reload = useCallback(async () => {
+    if (!orgId) return;
+    const { data, errors } = await client.queries.listOrgConnections({ orgId });
+    throwIfErrors(errors as { message: string }[] | undefined);
+    setConns((typeof data === 'string' ? JSON.parse(data) : data) as ConnRow[]);
+    setMembers(await fetchOrgMembers(orgId));
+    setRefreshKey((k) => k + 1);
+  }, [orgId]);
+
+  useEffect(() => {
+    void run(reload);
+  }, [run, reload]);
+
+  if (!orgId) return <Alert severity="info">組織に所属していません(app-admin にメンバー登録を依頼)。</Alert>;
+
+  async function register() {
+    await run(async () => {
+      const { errors } = await client.mutations.registerFreeeApp({ orgId: orgId as string, ...form });
+      throwIfErrors(errors as { message: string }[] | undefined);
+      setForm({ label: '', clientId: '', clientSecret: '' });
+      await reload();
+    });
+  }
+
+  async function authorize(connectionId: string) {
+    await run(async () => {
+      const { data, errors } = await client.mutations.startFreeeAuthorize({ connectionId });
+      throwIfErrors(errors as { message: string }[] | undefined);
+      if (data) window.open(data, '_blank', 'noopener');
+    });
+  }
+
+  async function grant(connectionId: string, userSub: string) {
+    await run(async () => {
+      const { errors } = await client.mutations.grantConnection({ connectionId, userSub });
+      throwIfErrors(errors as { message: string }[] | undefined);
+      await reload();
+    });
+  }
+
+  return (
+    <Box sx={{ maxWidth: 1100 }}>
+      {error && (
+        <Alert severity="error" sx={{ mb: 2, whiteSpace: 'pre-wrap' }}>
+          {error}
+        </Alert>
+      )}
+
+      <Card variant="outlined" sx={{ mb: 3 }}>
+        <CardContent>
+          <StepTitle>手順1. freee アプリ設定</StepTitle>
+          <Typography variant="body1" sx={{ mb: 1 }}>
+            <Link href="https://developer.freee.co.jp/" target="_blank" rel="noreferrer">
+              freee Developers
+            </Link>
+            でアプリを作成し、発行された クライアントID / クライアントシークレット をここに入力してください。
+            共通の認証情報は使わず、組織ごとに分けて保存します。
+          </Typography>
+          <Typography variant="body1" sx={{ mb: 1 }}>
+            freee Developers アプリの「コールバック URL」欄に下記の <strong>1 件</strong>を登録してください。
+          </Typography>
+          <Box sx={{ mb: 2 }}>
+            <CopyBox value={FREEE_CALLBACK_URL} />
+          </Box>
+          <Stack spacing={2}>
+            <TextField
+              label="表示名"
+              placeholder="表示名(例: 会計 / 顧問先A)"
+              value={form.label}
+              onChange={(e) => setForm({ ...form, label: e.target.value })}
+              helperText="複数の freee アプリ(顧問先)を登録できます"
+            />
+            <TextField
+              label="クライアントID"
+              required
+              placeholder="client_id"
+              value={form.clientId}
+              onChange={(e) => setForm({ ...form, clientId: e.target.value })}
+            />
+            <TextField
+              label="クライアントシークレット"
+              required
+              type="password"
+              placeholder="client_secret"
+              value={form.clientSecret}
+              onChange={(e) => setForm({ ...form, clientSecret: e.target.value })}
+              helperText="Secrets Manager にのみ保存されます"
+            />
+            <Box>
+              <Button variant="outlined" onClick={register} disabled={!form.label || !form.clientId || !form.clientSecret}>
+                保存
+              </Button>
+            </Box>
+          </Stack>
+        </CardContent>
+      </Card>
+
+      {conns.map((c) => (
+        <ConnectionSteps
+          key={c.id}
+          conn={c}
+          refreshKey={refreshKey}
+          members={members}
+          onAuthorize={authorize}
+          onGrant={grant}
+          onChanged={() => void run(reload)}
+        />
+      ))}
+    </Box>
+  );
+}
+
+function ConnectionSteps({
+  conn,
+  refreshKey,
+  members,
+  onAuthorize,
+  onGrant,
+  onChanged,
+}: {
+  conn: ConnRow;
+  refreshKey: number;
+  members: OrgMember[];
+  onAuthorize: (id: string) => void;
+  onGrant: (connectionId: string, userSub: string) => void;
+  onChanged: () => void;
+}) {
+  const [grants, setGrants] = useState<Schema['UserConnection']['type'][]>([]);
+  const [selected, setSelected] = useState('');
+  const emailOf = (userSub: string) => members.find((m) => m.userSub === userSub)?.email ?? userSub;
+
+  useEffect(() => {
+    let alive = true;
+    client.models.UserConnection.list({ filter: { connectionId: { eq: conn.id } } }).then(({ data }) => {
+      if (alive) setGrants(data);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [conn.id, refreshKey]);
+
+  async function revoke(userSub: string) {
+    await client.mutations.revokeConnection({ connectionId: conn.id, userSub });
+    onChanged();
+  }
+
+  const connected = conn.status === 'connected';
+  return (
+    <Card variant="outlined" sx={{ mb: 3 }}>
+      <CardContent>
+        <StepTitle
+          done={connected}
+          icon={connected ? <CheckCircleIcon color="success" /> : <RadioButtonUncheckedIcon color="warning" />}
+        >
+          手順2. {connected ? '認可済み' : '未認可'} — {conn.label}
+        </StepTitle>
+        <Typography variant="body1" sx={{ mb: 0.5 }}>
+          クライアントID: <Box component="code" sx={{ fontFamily: 'monospace' }}>{conn.clientId}</Box>
+        </Typography>
+        {conn.secretWrittenAt && (
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            シークレット保存済み({new Date(conn.secretWrittenAt).toLocaleString()})
+          </Typography>
+        )}
+        <Stack direction="row" spacing={1} sx={{ mb: 3 }}>
+          <Button variant="outlined" onClick={() => onAuthorize(conn.id)}>
+            {connected ? '再認証する' : '認可する'}
+          </Button>
+          <Button variant="outlined" color="inherit" onClick={onChanged}>
+            状態を更新
+          </Button>
+        </Stack>
+
+        <StepTitle icon={<GroupsIcon color={grants.length ? 'success' : 'primary'} />}>
+          手順3. 利用メンバー割当
+        </StepTitle>
+        <List dense>
+          {grants.map((g) => (
+            <ListItem
+              key={g.userSub}
+              secondaryAction={
+                <Button size="small" color="error" onClick={() => void revoke(g.userSub)}>
+                  解除
+                </Button>
+              }
+            >
+              <ListItemText slotProps={{ primary: { sx: { fontFamily: 'monospace', fontSize: 13 } } }} primary={emailOf(g.userSub)} />
+            </ListItem>
+          ))}
+          {grants.length === 0 && (
+            <ListItem>
+              <ListItemText secondary="未割当(割当がないと GPT から利用できません)" />
+            </ListItem>
+          )}
+        </List>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+          <TextField
+            select
+            size="small"
+            label="メンバーを選択"
+            value={selected}
+            onChange={(e) => setSelected(e.target.value)}
+            sx={{ minWidth: 380 }}
+            slotProps={{ select: { native: true }, inputLabel: { shrink: true } }}
+          >
+            <option value="">メンバーを選択…</option>
+            {members.map((m) => (
+              <option key={m.userSub} value={m.userSub}>
+                {m.email}({m.role})
+              </option>
+            ))}
+          </TextField>
+          <Button variant="outlined" disabled={!selected} onClick={() => selected && onGrant(conn.id, selected)}>
+            割当
+          </Button>
+        </Stack>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 組織管理(app-admin): 組織を作成し、初期 org-admin を email で任命する。
+// メンバー(一般ユーザー)の日常管理は org-admin が「ユーザー管理」で行う。
+
+function OrgsPage({ me }: { me: Me }) {
+  const [orgs, setOrgs] = useState<OrgRow[]>([]);
+  const [name, setName] = useState('');
+  const [error, run] = useAsyncError();
+
+  const reload = useCallback(async () => {
+    const { data } = await client.models.Org.list();
+    setOrgs(data);
+  }, []);
+
+  useEffect(() => {
+    void run(reload);
+  }, [run, reload]);
+
+  async function createOrg() {
+    await run(async () => {
+      const { errors } = await client.models.Org.create({ name, status: 'active', createdBy: me.sub });
+      throwIfErrors(errors as { message: string }[] | undefined);
+      setName('');
+      await reload();
+    });
+  }
+
+  return (
+    <Box sx={{ maxWidth: 1100 }}>
+      {error && (
+        <Alert severity="error" sx={{ mb: 2, whiteSpace: 'pre-wrap' }}>
+          {error}
+        </Alert>
+      )}
+      <Card variant="outlined" sx={{ mb: 3 }}>
+        <CardContent>
+          <StepTitle icon={<ApartmentIcon color="primary" />}>組織を作成</StepTitle>
+          <Stack direction="row" spacing={1}>
+            <TextField size="small" label="組織名" placeholder="組織名" value={name} onChange={(e) => setName(e.target.value)} />
+            <Button variant="outlined" onClick={createOrg} disabled={!name}>
+              組織を作成
+            </Button>
+          </Stack>
+        </CardContent>
+      </Card>
+      {orgs.map((o) => (
+        <OrgAdminCard key={o.id} org={o} onError={run} />
+      ))}
+    </Box>
+  );
+}
+
+// app-admin が org ごとに初期 org-admin を email で任命する。既存の org-admin を
+// 一覧表示し、未登録 email は招待メール送信 + Membership 作成を 1 操作で行う。
+function OrgAdminCard({ org, onError }: { org: OrgRow; onError: (fn: () => Promise<void>) => Promise<void> }) {
+  const [members, setMembers] = useState<OrgMember[]>([]);
+  const [email, setEmail] = useState('');
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    fetchOrgMembers(org.id).then((rows) => {
+      if (alive) setMembers(rows);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [org.id, refreshKey]);
+
+  const admins = members.filter((m) => m.role === 'org_admin');
+
+  async function appoint() {
+    await onError(async () => {
+      const { errors } = await client.mutations.createOrgUser({ orgId: org.id, email: email.trim(), role: 'org_admin' });
+      throwIfErrors(errors as { message: string }[] | undefined);
+      setEmail('');
+      setRefreshKey((k) => k + 1);
+    });
+  }
+
+  return (
+    <Card variant="outlined" sx={{ mb: 3 }}>
+      <CardContent>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
+          <Typography variant="h6">{org.name}</Typography>
+          {org.status === 'suspended' && (
+            <Typography color="error" variant="body2">
+              ⚠ suspended(org-admin 不在)
+            </Typography>
+          )}
+        </Stack>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+          組織管理者(以降のユーザー管理はこの管理者が行います)
+        </Typography>
+        <List dense>
+          {admins.map((m) => (
+            <ListItem key={m.userSub}>
+              <ListItemText primary={m.email} secondary={m.status === 'deleted' ? '削除済み' : 'org-admin'} />
+            </ListItem>
+          ))}
+          {admins.length === 0 && (
+            <ListItem>
+              <ListItemText secondary="org-admin 未任命(GUI を使えません — 下で任命してください)" />
+            </ListItem>
+          )}
+        </List>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+          <TextField
+            size="small"
+            type="email"
+            label="メールアドレス"
+            placeholder="組織管理者のメールアドレス"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            sx={{ width: 400 }}
+          />
+          <Button variant="outlined" startIcon={<PersonAddIcon />} onClick={appoint} disabled={!email.trim()}>
+            org-admin を任命
+          </Button>
+        </Stack>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ユーザー管理(org-admin): 自組織のメンバーを email で追加/一覧/削除。
+// createOrgUser が招待メール送信 → Membership 作成を 1 操作で行う。
+
+function MembersPage({ me }: { me: Me }) {
+  const orgId = me.orgId;
+  const [members, setMembers] = useState<OrgMember[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState<'org_admin' | 'user'>('user');
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [error, run] = useAsyncError();
+
+  useEffect(() => {
+    if (!orgId) return;
+    let alive = true;
+    void run(async () => {
+      const rows = await fetchOrgMembers(orgId);
+      if (alive) {
+        setMembers(rows);
+        setLoaded(true);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [orgId, refreshKey, run]);
+
+  if (!orgId) return <Alert severity="info">組織に所属していません(app-admin に org-admin 任命を依頼してください)。</Alert>;
+
+  async function addUser() {
+    await run(async () => {
+      const { errors } = await client.mutations.createOrgUser({ orgId: orgId as string, email: email.trim(), role });
+      throwIfErrors(errors as { message: string }[] | undefined);
+      setEmail('');
+      setRefreshKey((k) => k + 1);
+    });
+  }
+
+  async function remove(userSub: string) {
+    await run(async () => {
+      const { errors } = await client.mutations.removeMember({ userSub });
+      throwIfErrors(errors as { message: string }[] | undefined);
+      setRefreshKey((k) => k + 1);
+    });
+  }
+
+  return (
+    <Box sx={{ maxWidth: 1100 }}>
+      {error && (
+        <Alert severity="error" sx={{ mb: 2, whiteSpace: 'pre-wrap' }}>
+          {error}
+        </Alert>
+      )}
+      <Card variant="outlined">
+        <CardContent>
+          <StepTitle icon={<GroupsIcon color="primary" />}>メンバー</StepTitle>
+          <List dense>
+            {members.map((m) => (
+              <ListItem
+                key={m.userSub}
+                secondaryAction={
+                  <Button size="small" color="error" onClick={() => void remove(m.userSub)}>
+                    削除
+                  </Button>
+                }
+              >
+                <ListItemText primary={m.email} secondary={m.status === 'deleted' ? '削除済み' : m.role} />
+              </ListItem>
+            ))}
+            {loaded && members.length === 0 && (
+              <ListItem>
+                <ListItemText secondary="メンバーがいません" />
+              </ListItem>
+            )}
+          </List>
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mt: 1 }}>
+            <TextField
+              size="small"
+              type="email"
+              label="メールアドレス"
+              placeholder="追加するメンバーのメールアドレス"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              sx={{ width: 400 }}
+            />
+            <TextField
+              select
+              size="small"
+              label="role"
+              value={role}
+              onChange={(e) => setRole(e.target.value as 'org_admin' | 'user')}
+              slotProps={{ select: { native: true } }}
+              sx={{ width: 140 }}
+            >
+              <option value="user">user</option>
+              <option value="org_admin">org_admin</option>
+            </TextField>
+            <Button variant="outlined" startIcon={<PersonAddIcon />} onClick={addUser} disabled={!email.trim()}>
+              ユーザーを追加
+            </Button>
+          </Stack>
+        </CardContent>
+      </Card>
+    </Box>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// URL 体系は logic-solver と同一: /page-id/<役割ページ>/top-menu-id/<メニュー>
+//   アプリ管理者   /page-id/app-admin/top-menu-id/org-management   … 組織管理のみ
+//   組織管理者     /page-id/organization-admin/top-menu-id/freee-settings
+//   組織管理者     /page-id/organization-admin/top-menu-id/user-management … ユーザー管理
+//   一般ユーザー   /page-id/user-app/top-menu-id/gpt-guide
+
+const PATHS = {
+  orgs: '/page-id/app-admin/top-menu-id/org-management',
+  freee: '/page-id/organization-admin/top-menu-id/freee-settings',
+  users: '/page-id/organization-admin/top-menu-id/user-management',
+  guide: '/page-id/user-app/top-menu-id/gpt-guide',
+} as const;
+
+const PAGE_META: Record<string, { id: string; breadcrumbs: string[] }> = {
+  [PATHS.orgs]: { id: 'orgs', breadcrumbs: ['アプリ管理者ページ', '組織管理'] },
+  [PATHS.freee]: { id: 'freee', breadcrumbs: ['組織管理者ページ', 'フリー設定'] },
+  [PATHS.users]: { id: 'users', breadcrumbs: ['組織管理者ページ', 'ユーザー管理'] },
+  [PATHS.guide]: { id: 'guide', breadcrumbs: ['ユーザーページ', 'GPTs 設定ガイド'] },
+};
+
+function Shell({ signOut }: { signOut?: () => void }) {
+  const [me, setMe] = useState<Me | null>(null);
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  useEffect(() => {
+    void loadMe().then(setMe);
+  }, []);
+
+  if (!me) return <Typography sx={{ m: 4 }}>読み込み中…</Typography>;
+
+  const isOrgAdmin = me.role === 'org_admin' && !!me.orgId;
+  const topItems: SidebarItem[] = [
+    ...(me.isAppAdmin
+      ? [{ id: 'orgs', label: '組織管理', icon: <ApartmentIcon fontSize="small" />, onClick: () => navigate(PATHS.orgs) }]
+      : []),
+    ...(isOrgAdmin
+      ? [
+          { id: 'freee', label: 'フリー設定', icon: <SettingsIcon fontSize="small" />, onClick: () => navigate(PATHS.freee) },
+          { id: 'users', label: 'ユーザー管理', icon: <GroupsIcon fontSize="small" />, onClick: () => navigate(PATHS.users) },
+        ]
+      : []),
+    { id: 'guide', label: 'GPTs ガイド', icon: <MenuBookIcon fontSize="small" />, onClick: () => navigate(PATHS.guide) },
+  ];
+  const bottomItems: SidebarItem[] = [
+    { id: 'signout', label: 'サインアウト', icon: <LogoutIcon fontSize="small" />, onClick: () => signOut?.() },
+  ];
+
+  const meta = PAGE_META[location.pathname] ?? PAGE_META[PATHS.guide];
+  // 役割ごとの着地: app-admin → 組織管理 / org-admin → フリー設定 / それ以外 → ガイド
+  const home = me.isAppAdmin ? PATHS.orgs : isOrgAdmin ? PATHS.freee : PATHS.guide;
+
+  return (
+    <AppShell
+      topItems={topItems}
+      bottomItems={bottomItems}
+      activeItemId={(meta as { id: string }).id}
+      breadcrumbs={(meta as { breadcrumbs: string[] }).breadcrumbs}
+    >
+      <Routes>
+        <Route path={PATHS.orgs} element={me.isAppAdmin ? <OrgsPage me={me} /> : <Navigate to={home} replace />} />
+        <Route path={PATHS.freee} element={isOrgAdmin ? <FreeeSettingsPage me={me} /> : <Navigate to={home} replace />} />
+        <Route path={PATHS.users} element={isOrgAdmin ? <MembersPage me={me} /> : <Navigate to={home} replace />} />
+        <Route path={PATHS.guide} element={<GptSetupGuide />} />
+        <Route path="*" element={<Navigate to={home} replace />} />
+      </Routes>
+    </AppShell>
   );
 }
 
 function App() {
-  // hideSignUp: self sign-up is disabled (operators are admin-created).
-  return <Authenticator hideSignUp>{({ signOut }) => <Shell signOut={signOut} />}</Authenticator>;
+  return <Providers>{(signOut) => <Shell signOut={signOut} />}</Providers>;
 }
 
 export default App;
