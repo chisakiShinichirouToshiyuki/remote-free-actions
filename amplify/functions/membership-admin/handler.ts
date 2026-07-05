@@ -10,10 +10,14 @@ const client = generateClient<Schema>({ authMode: 'iam' });
 
 type Role = 'org_admin' | 'user';
 
+type FieldName = 'addMember' | 'setMemberRole' | 'removeMember' | 'grantConnection' | 'revokeConnection';
+
+// Amplify Gen2 custom operations deliver fieldName at the TOP LEVEL of the
+// payload; the classic AppSync direct-resolver shape nests it under info.
+// Accept both (unit mocks use info, the deployed runtime uses top-level).
 interface Event {
-  info: {
-    fieldName: 'addMember' | 'setMemberRole' | 'removeMember' | 'grantConnection' | 'revokeConnection';
-  };
+  fieldName?: FieldName;
+  info?: { fieldName: FieldName };
   arguments: { orgId?: string; userSub?: string; role?: Role; connectionId?: string };
   identity?: { sub?: string; groups?: string[] | null } | null;
 }
@@ -54,7 +58,8 @@ export const handler = async (event: Event) => {
   const caller = { sub, groups: event.identity?.groups ?? [] };
   const a = event.arguments;
 
-  switch (event.info.fieldName) {
+  const fieldName = event.fieldName ?? event.info?.fieldName;
+  switch (fieldName) {
     case 'addMember': {
       if (!a.orgId || !a.userSub) throw new RejectError('orgId and userSub are required');
       await assertCanManage(caller, a.orgId);

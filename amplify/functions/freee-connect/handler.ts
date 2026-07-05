@@ -18,8 +18,14 @@ const secrets = new SecretsManagerClient({});
 
 const STATE_TTL_SECONDS = 10 * 60;
 
+type FieldName = 'registerFreeeApp' | 'startFreeeAuthorize' | 'listOrgConnections';
+
+// Amplify Gen2 custom operations deliver fieldName at the TOP LEVEL of the
+// payload; the classic AppSync direct-resolver shape nests it under info.
+// Accept both (unit mocks use info, the deployed runtime uses top-level).
 interface Event {
-  info: { fieldName: 'registerFreeeApp' | 'startFreeeAuthorize' | 'listOrgConnections' };
+  fieldName?: FieldName;
+  info?: { fieldName: FieldName };
   arguments: { orgId?: string; label?: string; clientId?: string; clientSecret?: string; connectionId?: string };
   identity?: { sub?: string; groups?: string[] | null } | null;
 }
@@ -42,7 +48,8 @@ export const handler = async (event: Event) => {
   const caller = callerFromIdentity(event.identity);
   const a = event.arguments;
 
-  switch (event.info.fieldName) {
+  const fieldName = event.fieldName ?? event.info?.fieldName;
+  switch (fieldName) {
     case 'registerFreeeApp': {
       if (!a.orgId || !a.label || !a.clientId || !a.clientSecret) {
         throw new RejectError('orgId, label, clientId and clientSecret are required');
