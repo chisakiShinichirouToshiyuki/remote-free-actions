@@ -1,8 +1,17 @@
 import outputs from '../amplify_outputs.json';
 import { Screenshot } from './Screenshot';
 
-const BRIDGE_URL =
-  (outputs as { custom?: { bridgeUrl?: string } }).custom?.bridgeUrl ?? 'https://<your-bridge-function-url>';
+type Custom = {
+  custom?: {
+    bridgeUrl?: string;
+    gptOAuth?: { authorizeUrl?: string; tokenUrl?: string; clientId?: string };
+  };
+};
+const custom = (outputs as Custom).custom;
+const BRIDGE_URL = custom?.bridgeUrl ?? 'https://<your-bridge-function-url>';
+const AUTHORIZE_URL = custom?.gptOAuth?.authorizeUrl ?? 'https://<cognito-domain>/oauth2/authorize';
+const TOKEN_URL = custom?.gptOAuth?.tokenUrl ?? 'https://<cognito-domain>/oauth2/token';
+const GPT_CLIENT_ID = custom?.gptOAuth?.clientId ?? '<gpt-actions-client-id>';
 
 const code: React.CSSProperties = {
   background: '#f1f5f9',
@@ -57,12 +66,15 @@ export function GptSetupGuide() {
         <li>
           <strong>Authentication を OAuth(Cognito)に設定</strong>
           <ul>
-            <li>Client ID / Secret = Cognito アプリクライアント</li>
             <li>
-              Authorization URL = <code style={code}>https://&lt;cognito-domain&gt;/oauth2/authorize</code>
+              Client ID = <code style={code}>{GPT_CLIENT_ID}</code>(Secret は AWS console/CLI の
+              GptActionsClient から取得)
             </li>
             <li>
-              Token URL = <code style={code}>https://&lt;cognito-domain&gt;/oauth2/token</code>
+              Authorization URL = <code style={code}>{AUTHORIZE_URL}</code>
+            </li>
+            <li>
+              Token URL = <code style={code}>{TOKEN_URL}</code>
             </li>
             <li>Scope = <code style={code}>openid email</code>、Token Exchange = Default (POST)</li>
           </ul>
@@ -73,7 +85,9 @@ export function GptSetupGuide() {
           />
         </li>
         <li>
-          <strong>コールバック URL を Cognito に登録</strong>(GPT 保存後に表示される URL)
+          <strong>コールバック URL を登録</strong>(GPT 保存後に表示される URL)—
+          console で直接編集しない(次の deploy で IaC に戻される)。branch env{' '}
+          <code style={code}>GPT_OAUTH_CALLBACK_URLS</code> に設定して再 deploy する
           <Screenshot
             title="④ コールバックURLを Cognito に登録"
             alt="GPT 保存後に表示されたコールバックURLを Cognito アプリクライアントの Allowed callback URLs に追加した画面"
@@ -102,7 +116,12 @@ export function GptSetupGuide() {
       <ul>
         <li>401 が返る → Cognito トークン未取得/失効。GPT で再サインイン</li>
         <li>ログインできない → 利用者の Cognito アカウントが未発行(app-admin が発行)</li>
-        <li>freee 呼び出しが「未接続」→ app-admin が連携画面で freee を接続していない</li>
+        <li>
+          freee 呼び出しが「not connected / needs re-authorization」→ org-admin が freee を未接続。
+          <code style={code}>registerFreeeApp</code> → <code style={code}>startFreeeAuthorize</code>{' '}
+          で接続(GUI は準備中)
+        </li>
+        <li>「organization is suspended」→ org に active な org-admin が居ない(reconciler が停止中に設定)</li>
       </ul>
     </section>
   );
