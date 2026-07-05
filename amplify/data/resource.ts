@@ -191,6 +191,30 @@ const schema = a
       .returns(a.string()) // freee authorize URL
       .handler(a.handler.function(freeeConnect))
       .authorization((allow) => [allow.authenticated()]),
+    // org-admin GUI 用の接続一覧。FreeeConnection の model read は app-admin 限定
+    // (cipher 列を含むため緩められない)なので、Lambda が org-admin 検証のうえ
+    // sanitized な列だけ返す。
+    listOrgConnections: a
+      .query()
+      .arguments({ orgId: a.id().required() })
+      .returns(a.json()) // [{ id, label, clientId, status, secretWrittenAt }]
+      .handler(a.handler.function(freeeConnect))
+      .authorization((allow) => [allow.authenticated()]),
+
+    // user × app 割当(org-admin)。connection の org を Lambda が検証し、
+    // 同一 org のメンバーにのみ付与できる。重複付与は複合 PK が拒否。
+    grantConnection: a
+      .mutation()
+      .arguments({ userSub: a.string().required(), connectionId: a.id().required() })
+      .returns(a.ref('UserConnection'))
+      .handler(a.handler.function(membershipAdmin))
+      .authorization((allow) => [allow.authenticated()]),
+    revokeConnection: a
+      .mutation()
+      .arguments({ userSub: a.string().required(), connectionId: a.id().required() })
+      .returns(a.ref('UserConnection'))
+      .handler(a.handler.function(membershipAdmin))
+      .authorization((allow) => [allow.authenticated()]),
   })
   // 書込系 Lambda(reconciler / membership-admin / freee connect / OAuth callback)に
   // data の IAM R/W を付与。
