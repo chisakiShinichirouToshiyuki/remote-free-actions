@@ -32,7 +32,7 @@ export function GptSetupGuide() {
       <h1>GPTs 接続ガイド</h1>
       <p>
         ChatGPT の Custom GPT からこの bridge を呼び出す設定手順です。認証は Cognito OAuth(初回のみ別タブでログイン、以降は自動)。
-        利用者アカウントは app-admin が発行します。
+        利用者アカウントは org-admin が「ユーザー管理」で email から発行します。
       </p>
 
       <h2>前提</h2>
@@ -115,7 +115,7 @@ export function GptSetupGuide() {
       <h2>トラブルシュート</h2>
       <ul>
         <li>401 が返る → Cognito トークン未取得/失効。GPT で再サインイン</li>
-        <li>ログインできない → 利用者の Cognito アカウントが未発行(app-admin が発行)</li>
+        <li>ログインできない → 利用者アカウントが未発行(org-admin が「ユーザー管理」で email 追加)</li>
         <li>
           freee 呼び出しが「not connected / needs re-authorization」→ org-admin が freee を未接続。
           <code style={code}>registerFreeeApp</code> → <code style={code}>startFreeeAuthorize</code>{' '}
