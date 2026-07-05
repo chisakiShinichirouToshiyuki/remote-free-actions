@@ -1,28 +1,37 @@
 import { useCallback, useEffect, useState } from 'react';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import GroupsIcon from '@mui/icons-material/Groups';
+import LogoutIcon from '@mui/icons-material/Logout';
+import MenuBookIcon from '@mui/icons-material/MenuBook';
+import RadioButtonUncheckedIcon from '@mui/icons-material/RadioButtonUnchecked';
+import SettingsIcon from '@mui/icons-material/Settings';
 import Alert from '@mui/material/Alert';
-import AppBar from '@mui/material/AppBar';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
-import Chip from '@mui/material/Chip';
-import Container from '@mui/material/Container';
+import IconButton from '@mui/material/IconButton';
+import Link from '@mui/material/Link';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
 import ListItemText from '@mui/material/ListItemText';
 import Stack from '@mui/material/Stack';
-import Tab from '@mui/material/Tab';
-import Tabs from '@mui/material/Tabs';
 import TextField from '@mui/material/TextField';
-import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
 import { fetchAuthSession } from 'aws-amplify/auth';
 import { generateClient } from 'aws-amplify/data';
+import outputs from '../amplify_outputs.json';
 import type { Schema } from '../amplify/data/resource';
 import { GptSetupGuide } from './GptSetupGuide';
 import { Providers } from './providers';
+import { AppShell, type SidebarItem } from './ui/AppShell';
 
 const client = generateClient<Schema>();
+
+const FREEE_CALLBACK_URL =
+  (outputs as { custom?: { freeeCallbackUrl?: string } }).custom?.freeeCallbackUrl ??
+  'https://<freee-callback-url>';
 
 type OrgRow = Schema['Org']['type'];
 type MemberRow = Schema['Membership']['type'];
@@ -34,12 +43,7 @@ type ConnRow = {
   secretWrittenAt: string | null;
 };
 
-type Me = {
-  sub: string;
-  isAppAdmin: boolean;
-  orgId: string | null;
-  role: string | null;
-};
+type Me = { sub: string; isAppAdmin: boolean; orgId: string | null; role: string | null };
 
 async function loadMe(): Promise<Me> {
   const session = await fetchAuthSession();
@@ -71,10 +75,41 @@ function throwIfErrors(errors: { message: string }[] | undefined | null) {
   if (errors?.length) throw new Error(errors.map((e) => e.message).join('\n'));
 }
 
-// ---------------------------------------------------------------------------
-// org-admin: freee アプリ登録 → 認可 → メンバー割当
+function StepTitle({ done, icon, children }: { done?: boolean; icon?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
+      {icon ?? (done ? <CheckCircleIcon color="success" /> : <SettingsIcon color="primary" />)}
+      <Typography variant="h6">{children}</Typography>
+    </Stack>
+  );
+}
 
-function ConnectionsPanel({ me }: { me: Me }) {
+function CopyBox({ value }: { value: string }) {
+  return (
+    <Stack
+      direction="row"
+      sx={{
+        alignItems: 'center',
+        bgcolor: 'grey.100',
+        borderRadius: 1,
+        pl: 1.5,
+        pr: 0.5,
+        py: 0.5,
+        justifyContent: 'space-between',
+      }}
+    >
+      <Typography sx={{ fontFamily: 'monospace', fontSize: 14, wordBreak: 'break-all' }}>{value}</Typography>
+      <IconButton size="small" aria-label="コピー" onClick={() => void navigator.clipboard.writeText(value)}>
+        <ContentCopyIcon fontSize="small" />
+      </IconButton>
+    </Stack>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// フリー設定(org-admin): 手順1 アプリ設定 → 手順2 認可 → 手順3 利用メンバー
+
+function FreeeSettingsPage({ me }: { me: Me }) {
   const orgId = me.orgId;
   const [conns, setConns] = useState<ConnRow[]>([]);
   const [members, setMembers] = useState<MemberRow[]>([]);
@@ -89,20 +124,14 @@ function ConnectionsPanel({ me }: { me: Me }) {
     setConns((typeof data === 'string' ? JSON.parse(data) : data) as ConnRow[]);
     const m = await client.models.Membership.listMembershipByOrgId({ orgId });
     setMembers(m.data);
-    setRefreshKey((k) => k + 1); // ConnectionCard の grants effect を再発火させる
+    setRefreshKey((k) => k + 1);
   }, [orgId]);
 
   useEffect(() => {
     void run(reload);
   }, [run, reload]);
 
-  if (!orgId) {
-    return (
-      <Container maxWidth="md" sx={{ py: 4 }}>
-        <Alert severity="info">組織に所属していません(app-admin にメンバー登録を依頼)。</Alert>
-      </Container>
-    );
-  }
+  if (!orgId) return <Alert severity="info">組織に所属していません(app-admin にメンバー登録を依頼)。</Alert>;
 
   async function register() {
     await run(async () => {
@@ -130,10 +159,7 @@ function ConnectionsPanel({ me }: { me: Me }) {
   }
 
   return (
-    <Container maxWidth="md" sx={{ py: 3 }}>
-      <Typography variant="h5" gutterBottom>
-        freee アプリ接続
-      </Typography>
+    <Box sx={{ maxWidth: 1100 }}>
       {error && (
         <Alert severity="error" sx={{ mb: 2, whiteSpace: 'pre-wrap' }}>
           {error}
@@ -142,58 +168,55 @@ function ConnectionsPanel({ me }: { me: Me }) {
 
       <Card variant="outlined" sx={{ mb: 3 }}>
         <CardContent>
-          <Typography variant="h6" gutterBottom>
-            アプリを登録
+          <StepTitle>手順1. freee アプリ設定</StepTitle>
+          <Typography variant="body1" sx={{ mb: 1 }}>
+            <Link href="https://developer.freee.co.jp/" target="_blank" rel="noreferrer">
+              freee Developers
+            </Link>
+            でアプリを作成し、発行された クライアントID / クライアントシークレット をここに入力してください。
+            共通の認証情報は使わず、組織ごとに分けて保存します。
           </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            freee アプリストアで作成したアプリの client_id / client_secret を登録します。secret は
-            Secrets Manager にのみ保存されます。freee 側のコールバック URL には GPTs
-            設定ガイド記載の freeeCallbackUrl を登録してください。
+          <Typography variant="body1" sx={{ mb: 1 }}>
+            freee Developers アプリの「コールバック URL」欄に下記の <strong>1 件</strong>を登録してください。
           </Typography>
-          <Stack spacing={2} sx={{ maxWidth: 480 }}>
+          <Box sx={{ mb: 2 }}>
+            <CopyBox value={FREEE_CALLBACK_URL} />
+          </Box>
+          <Stack spacing={2}>
             <TextField
-              size="small"
               label="表示名"
               placeholder="表示名(例: 会計 / 顧問先A)"
               value={form.label}
               onChange={(e) => setForm({ ...form, label: e.target.value })}
+              helperText="複数の freee アプリ(顧問先)を登録できます"
             />
             <TextField
-              size="small"
-              label="client_id"
+              label="クライアントID"
+              required
               placeholder="client_id"
               value={form.clientId}
               onChange={(e) => setForm({ ...form, clientId: e.target.value })}
             />
             <TextField
-              size="small"
-              label="client_secret"
-              placeholder="client_secret"
+              label="クライアントシークレット"
+              required
               type="password"
+              placeholder="client_secret"
               value={form.clientSecret}
               onChange={(e) => setForm({ ...form, clientSecret: e.target.value })}
+              helperText="Secrets Manager にのみ保存されます"
             />
-            <Button
-              variant="contained"
-              onClick={register}
-              disabled={!form.label || !form.clientId || !form.clientSecret}
-            >
-              登録
-            </Button>
+            <Box>
+              <Button variant="outlined" onClick={register} disabled={!form.label || !form.clientId || !form.clientSecret}>
+                保存
+              </Button>
+            </Box>
           </Stack>
         </CardContent>
       </Card>
 
-      <Typography variant="h6" gutterBottom>
-        接続一覧
-      </Typography>
-      {conns.length === 0 && (
-        <Typography variant="body2" color="text.secondary">
-          まだ接続がありません。
-        </Typography>
-      )}
       {conns.map((c) => (
-        <ConnectionCard
+        <ConnectionSteps
           key={c.id}
           conn={c}
           refreshKey={refreshKey}
@@ -203,11 +226,11 @@ function ConnectionsPanel({ me }: { me: Me }) {
           onChanged={() => void run(reload)}
         />
       ))}
-    </Container>
+    </Box>
   );
 }
 
-function ConnectionCard({
+function ConnectionSteps({
   conn,
   refreshKey,
   members,
@@ -225,20 +248,11 @@ function ConnectionCard({
   const [grants, setGrants] = useState<Schema['UserConnection']['type'][]>([]);
   const [selected, setSelected] = useState('');
 
-  const reloadGrants = useCallback(async () => {
-    const { data } = await client.models.UserConnection.list({
-      filter: { connectionId: { eq: conn.id } },
-    });
-    setGrants(data);
-  }, [conn.id]);
-
   useEffect(() => {
     let alive = true;
-    client.models.UserConnection.list({ filter: { connectionId: { eq: conn.id } } }).then(
-      ({ data }) => {
-        if (alive) setGrants(data);
-      },
-    );
+    client.models.UserConnection.list({ filter: { connectionId: { eq: conn.id } } }).then(({ data }) => {
+      if (alive) setGrants(data);
+    });
     return () => {
       alive = false;
     };
@@ -246,39 +260,39 @@ function ConnectionCard({
 
   async function revoke(userSub: string) {
     await client.mutations.revokeConnection({ connectionId: conn.id, userSub });
-    await reloadGrants();
     onChanged();
   }
 
   const connected = conn.status === 'connected';
   return (
-    <Card variant="outlined" sx={{ mb: 2 }}>
+    <Card variant="outlined" sx={{ mb: 3 }}>
       <CardContent>
-        <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
-          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-            {conn.label}
-          </Typography>
-          <Chip
-            size="small"
-            color={connected ? 'success' : 'warning'}
-            label={connected ? '連携済' : '未連携 / 要再認可'}
-          />
-        </Stack>
-        <Typography variant="caption" color="text.secondary">
-          client_id: {conn.clientId}
+        <StepTitle
+          done={connected}
+          icon={connected ? <CheckCircleIcon color="success" /> : <RadioButtonUncheckedIcon color="warning" />}
+        >
+          手順2. {connected ? '認可済み' : '未認可'} — {conn.label}
+        </StepTitle>
+        <Typography variant="body1" sx={{ mb: 0.5 }}>
+          クライアントID: <Box component="code" sx={{ fontFamily: 'monospace' }}>{conn.clientId}</Box>
         </Typography>
-        <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
-          <Button variant="contained" size="small" onClick={() => onAuthorize(conn.id)}>
-            freee 認可を開始(別タブ)
+        {conn.secretWrittenAt && (
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            シークレット保存済み({new Date(conn.secretWrittenAt).toLocaleString()})
+          </Typography>
+        )}
+        <Stack direction="row" spacing={1} sx={{ mb: 3 }}>
+          <Button variant="outlined" onClick={() => onAuthorize(conn.id)}>
+            {connected ? '再認証する' : '認可する'}
           </Button>
-          <Button variant="outlined" size="small" onClick={onChanged}>
+          <Button variant="outlined" color="inherit" onClick={onChanged}>
             状態を更新
           </Button>
         </Stack>
 
-        <Typography variant="subtitle2" sx={{ mt: 2 }}>
-          利用メンバー
-        </Typography>
+        <StepTitle icon={<GroupsIcon color={grants.length ? 'success' : 'primary'} />}>
+          手順3. 利用メンバー割当
+        </StepTitle>
         <List dense>
           {grants.map((g) => (
             <ListItem
@@ -294,7 +308,7 @@ function ConnectionCard({
           ))}
           {grants.length === 0 && (
             <ListItem>
-              <ListItemText secondary="未割当" />
+              <ListItemText secondary="未割当(割当がないと GPT から利用できません)" />
             </ListItem>
           )}
         </List>
@@ -305,8 +319,8 @@ function ConnectionCard({
             label="メンバーを選択"
             value={selected}
             onChange={(e) => setSelected(e.target.value)}
-            sx={{ minWidth: 360 }}
-            slotProps={{ select: { native: true } }}
+            sx={{ minWidth: 380 }}
+            slotProps={{ select: { native: true }, inputLabel: { shrink: true } }}
           >
             <option value="">メンバーを選択…</option>
             {members.map((m) => (
@@ -315,7 +329,7 @@ function ConnectionCard({
               </option>
             ))}
           </TextField>
-          <Button variant="contained" size="small" disabled={!selected} onClick={() => selected && onGrant(conn.id, selected)}>
+          <Button variant="outlined" disabled={!selected} onClick={() => selected && onGrant(conn.id, selected)}>
             割当
           </Button>
         </Stack>
@@ -325,9 +339,9 @@ function ConnectionCard({
 }
 
 // ---------------------------------------------------------------------------
-// app-admin: Org 作成 + メンバー管理。Cognito user の作成自体は console(GUI 化予定)。
+// ユーザー管理(app-admin): 組織作成 + メンバー管理
 
-function OrgsPanel({ me }: { me: Me }) {
+function UsersPage({ me }: { me: Me }) {
   const [orgs, setOrgs] = useState<OrgRow[]>([]);
   const [name, setName] = useState('');
   const [error, run] = useAsyncError();
@@ -343,11 +357,7 @@ function OrgsPanel({ me }: { me: Me }) {
 
   async function createOrg() {
     await run(async () => {
-      const { errors } = await client.models.Org.create({
-        name,
-        status: 'active',
-        createdBy: me.sub,
-      });
+      const { errors } = await client.models.Org.create({ name, status: 'active', createdBy: me.sub });
       throwIfErrors(errors as { message: string }[] | undefined);
       setName('');
       await reload();
@@ -355,10 +365,7 @@ function OrgsPanel({ me }: { me: Me }) {
   }
 
   return (
-    <Container maxWidth="md" sx={{ py: 3 }}>
-      <Typography variant="h5" gutterBottom>
-        組織管理
-      </Typography>
+    <Box sx={{ maxWidth: 1100 }}>
       {error && (
         <Alert severity="error" sx={{ mb: 2, whiteSpace: 'pre-wrap' }}>
           {error}
@@ -366,15 +373,10 @@ function OrgsPanel({ me }: { me: Me }) {
       )}
       <Card variant="outlined" sx={{ mb: 3 }}>
         <CardContent>
+          <StepTitle icon={<GroupsIcon color="primary" />}>組織を作成</StepTitle>
           <Stack direction="row" spacing={1}>
-            <TextField
-              size="small"
-              label="組織名"
-              placeholder="組織名"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-            <Button variant="contained" onClick={createOrg} disabled={!name}>
+            <TextField size="small" label="組織名" placeholder="組織名" value={name} onChange={(e) => setName(e.target.value)} />
+            <Button variant="outlined" onClick={createOrg} disabled={!name}>
               組織を作成
             </Button>
           </Stack>
@@ -383,25 +385,15 @@ function OrgsPanel({ me }: { me: Me }) {
       {orgs.map((o) => (
         <OrgCard key={o.id} org={o} onError={run} />
       ))}
-    </Container>
+    </Box>
   );
 }
 
-function OrgCard({
-  org,
-  onError,
-}: {
-  org: OrgRow;
-  onError: (fn: () => Promise<void>) => Promise<void>;
-}) {
+function OrgCard({ org, onError }: { org: OrgRow; onError: (fn: () => Promise<void>) => Promise<void> }) {
   const [members, setMembers] = useState<MemberRow[]>([]);
   const [sub, setSub] = useState('');
   const [role, setRole] = useState<'org_admin' | 'user'>('org_admin');
-
-  const reload = useCallback(async () => {
-    const { data } = await client.models.Membership.listMembershipByOrgId({ orgId: org.id });
-    setMembers(data);
-  }, [org.id]);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -411,14 +403,14 @@ function OrgCard({
     return () => {
       alive = false;
     };
-  }, [org.id]);
+  }, [org.id, refreshKey]);
 
   async function add() {
     await onError(async () => {
       const { errors } = await client.mutations.addMember({ orgId: org.id, userSub: sub, role });
       throwIfErrors(errors as { message: string }[] | undefined);
       setSub('');
-      await reload();
+      setRefreshKey((k) => k + 1);
     });
   }
 
@@ -426,18 +418,20 @@ function OrgCard({
     await onError(async () => {
       const { errors } = await client.mutations.removeMember({ userSub });
       throwIfErrors(errors as { message: string }[] | undefined);
-      await reload();
+      setRefreshKey((k) => k + 1);
     });
   }
 
   return (
-    <Card variant="outlined" sx={{ mb: 2 }}>
+    <Card variant="outlined" sx={{ mb: 3 }}>
       <CardContent>
-        <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
-          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
-            {org.name}
-          </Typography>
-          {org.status === 'suspended' && <Chip size="small" color="error" label="suspended(org-admin 不在)" />}
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
+          <Typography variant="h6">{org.name}</Typography>
+          {org.status === 'suspended' && (
+            <Typography color="error" variant="body2">
+              ⚠ suspended(org-admin 不在)
+            </Typography>
+          )}
         </Stack>
         <List dense>
           {members.map((m) => (
@@ -464,7 +458,7 @@ function OrgCard({
             placeholder="Cognito user の sub(console 発行 → 貼付)"
             value={sub}
             onChange={(e) => setSub(e.target.value)}
-            sx={{ width: 380 }}
+            sx={{ width: 400 }}
           />
           <TextField
             select
@@ -478,7 +472,7 @@ function OrgCard({
             <option value="org_admin">org_admin</option>
             <option value="user">user</option>
           </TextField>
-          <Button variant="contained" onClick={add} disabled={!sub}>
+          <Button variant="outlined" onClick={add} disabled={!sub}>
             メンバー追加
           </Button>
         </Stack>
@@ -489,60 +483,42 @@ function OrgCard({
 
 // ---------------------------------------------------------------------------
 
+type View = 'freee' | 'users' | 'guide';
+
 function Shell({ signOut }: { signOut?: () => void }) {
   const [me, setMe] = useState<Me | null>(null);
-  const [view, setView] = useState<'connections' | 'orgs' | 'guide'>('connections');
+  const [view, setView] = useState<View>('freee');
 
   useEffect(() => {
     void loadMe().then(setMe);
   }, []);
 
-  if (!me) {
-    return (
-      <Container sx={{ py: 4 }}>
-        <Typography>読み込み中…</Typography>
-      </Container>
-    );
-  }
+  if (!me) return <Typography sx={{ m: 4 }}>読み込み中…</Typography>;
+
+  const topItems: SidebarItem[] = [
+    { id: 'freee', label: 'フリー設定', icon: <SettingsIcon fontSize="small" />, onClick: () => setView('freee') },
+    ...(me.isAppAdmin
+      ? [{ id: 'users', label: 'ユーザー管理', icon: <GroupsIcon fontSize="small" />, onClick: () => setView('users') }]
+      : []),
+    { id: 'guide', label: 'GPTs ガイド', icon: <MenuBookIcon fontSize="small" />, onClick: () => setView('guide') },
+  ];
+  const bottomItems: SidebarItem[] = [
+    { id: 'signout', label: 'サインアウト', icon: <LogoutIcon fontSize="small" />, onClick: () => signOut?.() },
+  ];
+
+  const breadcrumbs =
+    view === 'freee'
+      ? ['組織管理者ページ', 'フリー設定']
+      : view === 'users'
+        ? ['アプリ管理者ページ', 'ユーザー管理']
+        : ['GPTs 設定ガイド'];
 
   return (
-    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
-      <AppBar position="static" elevation={1}>
-        <Toolbar variant="dense">
-          <Typography variant="h6" sx={{ mr: 3, fontSize: 16 }}>
-            freee GPT bridge
-          </Typography>
-          <Tabs
-            value={view}
-            onChange={(_, v) => setView(v as typeof view)}
-            textColor="inherit"
-            indicatorColor="secondary"
-            sx={{ flex: 1 }}
-          >
-            <Tab value="connections" label="freee 連携" />
-            {me.isAppAdmin && <Tab value="orgs" label="組織管理" />}
-            <Tab value="guide" label="GPTs 設定ガイド" />
-          </Tabs>
-          <Chip
-            size="small"
-            variant="outlined"
-            color="default"
-            sx={{ color: 'inherit', borderColor: 'rgba(255,255,255,0.5)', mr: 1.5 }}
-            label={me.isAppAdmin ? 'app-admin' : (me.role ?? '未所属')}
-          />
-          <Button color="inherit" onClick={signOut}>
-            サインアウト
-          </Button>
-        </Toolbar>
-      </AppBar>
-      {view === 'connections' && <ConnectionsPanel me={me} />}
-      {view === 'orgs' && me.isAppAdmin && <OrgsPanel me={me} />}
-      {view === 'guide' && (
-        <Container maxWidth="md" sx={{ py: 3, bgcolor: 'background.paper' }}>
-          <GptSetupGuide />
-        </Container>
-      )}
-    </Box>
+    <AppShell topItems={topItems} bottomItems={bottomItems} activeItemId={view} breadcrumbs={breadcrumbs}>
+      {view === 'freee' && <FreeeSettingsPage me={me} />}
+      {view === 'users' && me.isAppAdmin && <UsersPage me={me} />}
+      {view === 'guide' && <GptSetupGuide />}
+    </AppShell>
   );
 }
 
