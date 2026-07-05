@@ -42,6 +42,13 @@ handled by **coding standard, not by triage**:
   keeps the noisy suites permanently blocking; triage debt never accumulates.
 - The only acceptable dismissal is "used in tests" for a finding whose fixture
   nature is explicit, and it must be justified in the PR description.
+- Rule-level exclusions are allowed ONLY for structural incompatibilities —
+  a rule that no correct implementation of the required behavior can satisfy.
+  They live in `.github/codeql/codeql-config.yml` (query-filters) with the
+  rationale inline, so the exception is codified and reviewed, never a silent
+  per-alert dismissal. Current list: `js/user-controlled-bypass-more-sources`
+  (an OAuth client must let the token server's response decide token
+  persistence; base rule stays enabled).
 
 ## Authorization invariants (enforced + tested)
 
