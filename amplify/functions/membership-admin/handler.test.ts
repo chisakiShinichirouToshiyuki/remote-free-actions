@@ -236,3 +236,15 @@ describe('grantConnection / revokeConnection (user × app 割当)', () => {
     expect(ucs.has('conn-1|user-1')).toBe(false);
   });
 });
+
+describe('event shape compatibility', () => {
+  it('accepts the Amplify Gen2 payload where fieldName is TOP-LEVEL (not under info) — the deployed runtime shape', async () => {
+    seed([ADMIN]);
+    await handler({
+      fieldName: 'addMember',
+      arguments: { orgId: 'org-1', userSub: 'user-new' },
+      identity: { sub: ADMIN.userSub, groups: [] },
+    } as never);
+    expect(db.has('user-new')).toBe(true);
+  });
+});
