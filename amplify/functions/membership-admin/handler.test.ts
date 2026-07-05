@@ -71,7 +71,7 @@ vi.mock('aws-amplify/data', () => ({ generateClient: () => ({ models }) }));
 
 const { handler } = await import('./handler');
 
-type Args = { orgId?: string; userSub?: string; role?: 'org_admin' | 'user' };
+type Args = { orgId?: string; userSub?: string; role?: 'org_admin' | 'user'; connectionId?: string };
 
 function call(
   fieldName: 'addMember' | 'setMemberRole' | 'removeMember' | 'grantConnection' | 'revokeConnection',
