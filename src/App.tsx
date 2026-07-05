@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import CorporateFareIcon from '@mui/icons-material/CorporateFare';
 import GroupsIcon from '@mui/icons-material/Groups';
 import LogoutIcon from '@mui/icons-material/Logout';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
@@ -340,9 +341,10 @@ function ConnectionSteps({
 }
 
 // ---------------------------------------------------------------------------
-// ユーザー管理(app-admin): 組織作成 + メンバー管理
+// 組織管理(app-admin): 組織作成 + 初期 org-admin 任命まで。以降のユーザー管理は
+// 各組織の org-admin の仕事(役割分担: app-admin は組織の器だけ作る)。
 
-function UsersPage({ me }: { me: Me }) {
+function OrgsPage({ me }: { me: Me }) {
   const [orgs, setOrgs] = useState<OrgRow[]>([]);
   const [name, setName] = useState('');
   const [error, run] = useAsyncError();
@@ -393,7 +395,6 @@ function UsersPage({ me }: { me: Me }) {
 function OrgCard({ org, onError }: { org: OrgRow; onError: (fn: () => Promise<void>) => Promise<void> }) {
   const [members, setMembers] = useState<MemberRow[]>([]);
   const [sub, setSub] = useState('');
-  const [role, setRole] = useState<'org_admin' | 'user'>('org_admin');
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
@@ -406,19 +407,11 @@ function OrgCard({ org, onError }: { org: OrgRow; onError: (fn: () => Promise<vo
     };
   }, [org.id, refreshKey]);
 
-  async function add() {
+  async function appoint() {
     await onError(async () => {
-      const { errors } = await client.mutations.addMember({ orgId: org.id, userSub: sub, role });
+      const { errors } = await client.mutations.addMember({ orgId: org.id, userSub: sub, role: 'org_admin' });
       throwIfErrors(errors as { message: string }[] | undefined);
       setSub('');
-      setRefreshKey((k) => k + 1);
-    });
-  }
-
-  async function remove(userSub: string) {
-    await onError(async () => {
-      const { errors } = await client.mutations.removeMember({ userSub });
-      throwIfErrors(errors as { message: string }[] | undefined);
       setRefreshKey((k) => k + 1);
     });
   }
@@ -436,14 +429,7 @@ function OrgCard({ org, onError }: { org: OrgRow; onError: (fn: () => Promise<vo
         </Stack>
         <List dense>
           {members.map((m) => (
-            <ListItem
-              key={m.userSub}
-              secondaryAction={
-                <Button size="small" color="error" onClick={() => void remove(m.userSub)}>
-                  削除
-                </Button>
-              }
-            >
+            <ListItem key={m.userSub}>
               <ListItemText
                 slotProps={{ primary: { sx: { fontFamily: 'monospace', fontSize: 13 } } }}
                 primary={m.userSub}
@@ -451,34 +437,125 @@ function OrgCard({ org, onError }: { org: OrgRow; onError: (fn: () => Promise<vo
               />
             </ListItem>
           ))}
+          {members.length === 0 && (
+            <ListItem>
+              <ListItemText secondary="org-admin 未任命(任命すると以降はその org-admin がユーザーを管理)" />
+            </ListItem>
+          )}
         </List>
         <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
           <TextField
             size="small"
-            label="Cognito user の sub"
+            label="初期 org-admin の sub"
             placeholder="Cognito user の sub(console 発行 → 貼付)"
             value={sub}
             onChange={(e) => setSub(e.target.value)}
             sx={{ width: 400 }}
           />
-          <TextField
-            select
-            size="small"
-            label="role"
-            value={role}
-            onChange={(e) => setRole(e.target.value as 'org_admin' | 'user')}
-            slotProps={{ select: { native: true } }}
-            sx={{ width: 140 }}
-          >
-            <option value="org_admin">org_admin</option>
-            <option value="user">user</option>
-          </TextField>
-          <Button variant="outlined" onClick={add} disabled={!sub}>
-            メンバー追加
+          <Button variant="outlined" onClick={appoint} disabled={!sub}>
+            org-admin を任命
           </Button>
         </Stack>
       </CardContent>
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ユーザー管理(org-admin): 自組織のメンバー追加・削除。最後の org-admin の
+// 降格/削除は backend が拒否する。
+
+function MembersPage({ me }: { me: Me }) {
+  const orgId = me.orgId as string;
+  const [members, setMembers] = useState<MemberRow[]>([]);
+  const [sub, setSub] = useState('');
+  const [role, setRole] = useState<'org_admin' | 'user'>('user');
+  const [error, run] = useAsyncError();
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    client.models.Membership.listMembershipByOrgId({ orgId }).then(({ data }) => {
+      if (alive) setMembers(data);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [orgId, refreshKey]);
+
+  async function add() {
+    await run(async () => {
+      const { errors } = await client.mutations.addMember({ orgId, userSub: sub, role });
+      throwIfErrors(errors as { message: string }[] | undefined);
+      setSub('');
+      setRefreshKey((k) => k + 1);
+    });
+  }
+
+  async function remove(userSub: string) {
+    await run(async () => {
+      const { errors } = await client.mutations.removeMember({ userSub });
+      throwIfErrors(errors as { message: string }[] | undefined);
+      setRefreshKey((k) => k + 1);
+    });
+  }
+
+  return (
+    <Box sx={{ maxWidth: 1100 }}>
+      {error && (
+        <Alert severity="error" sx={{ mb: 2, whiteSpace: 'pre-wrap' }}>
+          {error}
+        </Alert>
+      )}
+      <Card variant="outlined">
+        <CardContent>
+          <StepTitle icon={<GroupsIcon color="primary" />}>組織のユーザー管理</StepTitle>
+          <List dense>
+            {members.map((m) => (
+              <ListItem
+                key={m.userSub}
+                secondaryAction={
+                  <Button size="small" color="error" onClick={() => void remove(m.userSub)}>
+                    削除
+                  </Button>
+                }
+              >
+                <ListItemText
+                  slotProps={{ primary: { sx: { fontFamily: 'monospace', fontSize: 13 } } }}
+                  primary={m.userSub}
+                  secondary={m.role}
+                />
+              </ListItem>
+            ))}
+          </List>
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+            <TextField
+              size="small"
+              label="Cognito user の sub"
+              placeholder="Cognito user の sub(console 発行 → 貼付)"
+              value={sub}
+              onChange={(e) => setSub(e.target.value)}
+              sx={{ width: 400 }}
+            />
+            <TextField
+              select
+              size="small"
+              label="role"
+              value={role}
+              onChange={(e) => setRole(e.target.value as 'org_admin' | 'user')}
+              slotProps={{ select: { native: true } }}
+              sx={{ width: 140 }}
+            >
+              <option value="user">user</option>
+              <option value="org_admin">org_admin</option>
+            </TextField>
+            <Button variant="outlined" onClick={add} disabled={!sub}>
+              メンバー追加
+            </Button>
+          </Stack>
+        </CardContent>
+      </Card>
+    </Box>
   );
 }
 
@@ -490,13 +567,15 @@ function OrgCard({ org, onError }: { org: OrgRow; onError: (fn: () => Promise<vo
 
 const PATHS = {
   freee: '/page-id/organization-admin/top-menu-id/freee-settings',
-  users: '/page-id/app-admin/top-menu-id/user-management',
+  members: '/page-id/organization-admin/top-menu-id/user-management',
+  orgs: '/page-id/app-admin/top-menu-id/org-management',
   guide: '/page-id/user-app/top-menu-id/gpt-guide',
 } as const;
 
 const PAGE_META: Record<string, { id: string; breadcrumbs: string[] }> = {
   [PATHS.freee]: { id: 'freee', breadcrumbs: ['組織管理者ページ', 'フリー設定'] },
-  [PATHS.users]: { id: 'users', breadcrumbs: ['アプリ管理者ページ', 'ユーザー管理'] },
+  [PATHS.members]: { id: 'members', breadcrumbs: ['組織管理者ページ', 'ユーザー管理'] },
+  [PATHS.orgs]: { id: 'orgs', breadcrumbs: ['アプリ管理者ページ', '組織管理'] },
   [PATHS.guide]: { id: 'guide', breadcrumbs: ['ユーザーページ', 'GPTs 設定ガイド'] },
 };
 
@@ -511,10 +590,16 @@ function Shell({ signOut }: { signOut?: () => void }) {
 
   if (!me) return <Typography sx={{ m: 4 }}>読み込み中…</Typography>;
 
+  const isOrgAdmin = me.role === 'org_admin';
   const topItems: SidebarItem[] = [
-    { id: 'freee', label: 'フリー設定', icon: <SettingsIcon fontSize="small" />, onClick: () => navigate(PATHS.freee) },
+    ...(me.orgId
+      ? [{ id: 'freee', label: 'フリー設定', icon: <SettingsIcon fontSize="small" />, onClick: () => navigate(PATHS.freee) }]
+      : []),
+    ...(isOrgAdmin
+      ? [{ id: 'members', label: 'ユーザー管理', icon: <GroupsIcon fontSize="small" />, onClick: () => navigate(PATHS.members) }]
+      : []),
     ...(me.isAppAdmin
-      ? [{ id: 'users', label: 'ユーザー管理', icon: <GroupsIcon fontSize="small" />, onClick: () => navigate(PATHS.users) }]
+      ? [{ id: 'orgs', label: '組織管理', icon: <CorporateFareIcon fontSize="small" />, onClick: () => navigate(PATHS.orgs) }]
       : []),
     { id: 'guide', label: 'GPTs ガイド', icon: <MenuBookIcon fontSize="small" />, onClick: () => navigate(PATHS.guide) },
   ];
@@ -523,8 +608,8 @@ function Shell({ signOut }: { signOut?: () => void }) {
   ];
 
   const meta = PAGE_META[location.pathname] ?? PAGE_META[PATHS.freee];
-  // 役割ごとの着地: app-admin → ユーザー管理 / org 所属 → フリー設定 / それ以外 → ガイド
-  const home = me.isAppAdmin ? PATHS.users : me.orgId ? PATHS.freee : PATHS.guide;
+  // 役割ごとの着地: app-admin → 組織管理 / org 所属 → フリー設定 / それ以外 → ガイド
+  const home = me.isAppAdmin ? PATHS.orgs : me.orgId ? PATHS.freee : PATHS.guide;
 
   return (
     <AppShell
@@ -536,8 +621,12 @@ function Shell({ signOut }: { signOut?: () => void }) {
       <Routes>
         <Route path={PATHS.freee} element={<FreeeSettingsPage me={me} />} />
         <Route
-          path={PATHS.users}
-          element={me.isAppAdmin ? <UsersPage me={me} /> : <Navigate to={home} replace />}
+          path={PATHS.members}
+          element={isOrgAdmin ? <MembersPage me={me} /> : <Navigate to={home} replace />}
+        />
+        <Route
+          path={PATHS.orgs}
+          element={me.isAppAdmin ? <OrgsPage me={me} /> : <Navigate to={home} replace />}
         />
         <Route path={PATHS.guide} element={<GptSetupGuide />} />
         <Route path="*" element={<Navigate to={home} replace />} />
