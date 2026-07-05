@@ -1,10 +1,26 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Authenticator } from '@aws-amplify/ui-react';
-import '@aws-amplify/ui-react/styles.css';
+import Alert from '@mui/material/Alert';
+import AppBar from '@mui/material/AppBar';
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Card from '@mui/material/Card';
+import CardContent from '@mui/material/CardContent';
+import Chip from '@mui/material/Chip';
+import Container from '@mui/material/Container';
+import List from '@mui/material/List';
+import ListItem from '@mui/material/ListItem';
+import ListItemText from '@mui/material/ListItemText';
+import Stack from '@mui/material/Stack';
+import Tab from '@mui/material/Tab';
+import Tabs from '@mui/material/Tabs';
+import TextField from '@mui/material/TextField';
+import Toolbar from '@mui/material/Toolbar';
+import Typography from '@mui/material/Typography';
 import { fetchAuthSession } from 'aws-amplify/auth';
 import { generateClient } from 'aws-amplify/data';
 import type { Schema } from '../amplify/data/resource';
 import { GptSetupGuide } from './GptSetupGuide';
+import { Providers } from './providers';
 
 const client = generateClient<Schema>();
 
@@ -51,14 +67,6 @@ function useAsyncError(): [string | null, (fn: () => Promise<void>) => Promise<v
   return [error, run];
 }
 
-const box: React.CSSProperties = {
-  border: '1px solid #ddd',
-  borderRadius: 8,
-  padding: 12,
-  margin: '8px 0',
-};
-const errStyle: React.CSSProperties = { color: '#c40', whiteSpace: 'pre-wrap' };
-
 function throwIfErrors(errors: { message: string }[] | undefined | null) {
   if (errors?.length) throw new Error(errors.map((e) => e.message).join('\n'));
 }
@@ -88,7 +96,13 @@ function ConnectionsPanel({ me }: { me: Me }) {
     void run(reload);
   }, [run, reload]);
 
-  if (!orgId) return <p style={{ margin: '2rem' }}>組織に所属していません(app-admin にメンバー登録を依頼)。</p>;
+  if (!orgId) {
+    return (
+      <Container maxWidth="md" sx={{ py: 4 }}>
+        <Alert severity="info">組織に所属していません(app-admin にメンバー登録を依頼)。</Alert>
+      </Container>
+    );
+  }
 
   async function register() {
     await run(async () => {
@@ -116,46 +130,68 @@ function ConnectionsPanel({ me }: { me: Me }) {
   }
 
   return (
-    <main style={{ maxWidth: 820, margin: '1rem auto', fontFamily: 'system-ui' }}>
-      <h2>freee アプリ接続(org-admin)</h2>
-      {error && <p style={errStyle}>{error}</p>}
+    <Container maxWidth="md" sx={{ py: 3 }}>
+      <Typography variant="h5" gutterBottom>
+        freee アプリ接続
+      </Typography>
+      {error && (
+        <Alert severity="error" sx={{ mb: 2, whiteSpace: 'pre-wrap' }}>
+          {error}
+        </Alert>
+      )}
 
-      <div style={box}>
-        <h3>アプリを登録</h3>
-        <p style={{ fontSize: 13, color: '#666' }}>
-          freee アプリストアで作成したアプリの client_id / client_secret を登録。secret は
-          Secrets Manager にのみ保存されます。freee 側のコールバック URL には GPTs
-          設定ガイド記載の freeeCallbackUrl を登録してください。
-        </p>
-        <div style={{ display: 'grid', gap: 8, maxWidth: 480 }}>
-          <input
-            placeholder="表示名(例: 会計 / 顧問先A)"
-            value={form.label}
-            onChange={(e) => setForm({ ...form, label: e.target.value })}
-          />
-          <input
-            placeholder="client_id"
-            value={form.clientId}
-            onChange={(e) => setForm({ ...form, clientId: e.target.value })}
-          />
-          <input
-            placeholder="client_secret"
-            type="password"
-            value={form.clientSecret}
-            onChange={(e) => setForm({ ...form, clientSecret: e.target.value })}
-          />
-          <button
-            type="button"
-            onClick={register}
-            disabled={!form.label || !form.clientId || !form.clientSecret}
-          >
-            登録
-          </button>
-        </div>
-      </div>
+      <Card variant="outlined" sx={{ mb: 3 }}>
+        <CardContent>
+          <Typography variant="h6" gutterBottom>
+            アプリを登録
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            freee アプリストアで作成したアプリの client_id / client_secret を登録します。secret は
+            Secrets Manager にのみ保存されます。freee 側のコールバック URL には GPTs
+            設定ガイド記載の freeeCallbackUrl を登録してください。
+          </Typography>
+          <Stack spacing={2} sx={{ maxWidth: 480 }}>
+            <TextField
+              size="small"
+              label="表示名"
+              placeholder="表示名(例: 会計 / 顧問先A)"
+              value={form.label}
+              onChange={(e) => setForm({ ...form, label: e.target.value })}
+            />
+            <TextField
+              size="small"
+              label="client_id"
+              placeholder="client_id"
+              value={form.clientId}
+              onChange={(e) => setForm({ ...form, clientId: e.target.value })}
+            />
+            <TextField
+              size="small"
+              label="client_secret"
+              placeholder="client_secret"
+              type="password"
+              value={form.clientSecret}
+              onChange={(e) => setForm({ ...form, clientSecret: e.target.value })}
+            />
+            <Button
+              variant="contained"
+              onClick={register}
+              disabled={!form.label || !form.clientId || !form.clientSecret}
+            >
+              登録
+            </Button>
+          </Stack>
+        </CardContent>
+      </Card>
 
-      <h3>接続一覧</h3>
-      {conns.length === 0 && <p>まだ接続がありません。</p>}
+      <Typography variant="h6" gutterBottom>
+        接続一覧
+      </Typography>
+      {conns.length === 0 && (
+        <Typography variant="body2" color="text.secondary">
+          まだ接続がありません。
+        </Typography>
+      )}
       {conns.map((c) => (
         <ConnectionCard
           key={c.id}
@@ -167,7 +203,7 @@ function ConnectionsPanel({ me }: { me: Me }) {
           onChanged={() => void run(reload)}
         />
       ))}
-    </main>
+    </Container>
   );
 }
 
@@ -216,52 +252,80 @@ function ConnectionCard({
 
   const connected = conn.status === 'connected';
   return (
-    <div style={box}>
-      <strong>{conn.label}</strong>{' '}
-      <span style={{ color: connected ? '#0a7' : '#c40' }}>
-        {connected ? '● 連携済' : '○ 未連携 / 要再認可'}
-      </span>
-      <div style={{ fontSize: 12, color: '#666' }}>client_id: {conn.clientId}</div>
-      <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
-        <button type="button" onClick={() => onAuthorize(conn.id)}>
-          freee 認可を開始(別タブ)
-        </button>
-        <button type="button" onClick={onChanged}>
-          状態を更新
-        </button>
-      </div>
-      <div style={{ marginTop: 10 }}>
-        <strong style={{ fontSize: 13 }}>利用メンバー</strong>
-        <ul style={{ margin: '4px 0', paddingLeft: 20, fontSize: 13 }}>
+    <Card variant="outlined" sx={{ mb: 2 }}>
+      <CardContent>
+        <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+            {conn.label}
+          </Typography>
+          <Chip
+            size="small"
+            color={connected ? 'success' : 'warning'}
+            label={connected ? '連携済' : '未連携 / 要再認可'}
+          />
+        </Stack>
+        <Typography variant="caption" color="text.secondary">
+          client_id: {conn.clientId}
+        </Typography>
+        <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
+          <Button variant="contained" size="small" onClick={() => onAuthorize(conn.id)}>
+            freee 認可を開始(別タブ)
+          </Button>
+          <Button variant="outlined" size="small" onClick={onChanged}>
+            状態を更新
+          </Button>
+        </Stack>
+
+        <Typography variant="subtitle2" sx={{ mt: 2 }}>
+          利用メンバー
+        </Typography>
+        <List dense>
           {grants.map((g) => (
-            <li key={g.userSub}>
-              <code>{g.userSub}</code>{' '}
-              <button type="button" onClick={() => void revoke(g.userSub)}>
-                解除
-              </button>
-            </li>
+            <ListItem
+              key={g.userSub}
+              secondaryAction={
+                <Button size="small" color="error" onClick={() => void revoke(g.userSub)}>
+                  解除
+                </Button>
+              }
+            >
+              <ListItemText slotProps={{ primary: { sx: { fontFamily: 'monospace', fontSize: 13 } } }} primary={g.userSub} />
+            </ListItem>
           ))}
-          {grants.length === 0 && <li style={{ color: '#666' }}>未割当</li>}
-        </ul>
-        <select value={selected} onChange={(e) => setSelected(e.target.value)}>
-          <option value="">メンバーを選択…</option>
-          {members.map((m) => (
-            <option key={m.userSub} value={m.userSub}>
-              {m.userSub}({m.role})
-            </option>
-          ))}
-        </select>{' '}
-        <button type="button" disabled={!selected} onClick={() => selected && onGrant(conn.id, selected)}>
-          割当
-        </button>
-      </div>
-    </div>
+          {grants.length === 0 && (
+            <ListItem>
+              <ListItemText secondary="未割当" />
+            </ListItem>
+          )}
+        </List>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+          <TextField
+            select
+            size="small"
+            label="メンバーを選択"
+            value={selected}
+            onChange={(e) => setSelected(e.target.value)}
+            sx={{ minWidth: 360 }}
+            slotProps={{ select: { native: true } }}
+          >
+            <option value="">メンバーを選択…</option>
+            {members.map((m) => (
+              <option key={m.userSub} value={m.userSub}>
+                {m.userSub}({m.role})
+              </option>
+            ))}
+          </TextField>
+          <Button variant="contained" size="small" disabled={!selected} onClick={() => selected && onGrant(conn.id, selected)}>
+            割当
+          </Button>
+        </Stack>
+      </CardContent>
+    </Card>
   );
 }
 
 // ---------------------------------------------------------------------------
-// app-admin: Org 作成 + メンバー管理。Cognito user の作成自体は #12(それまでは
-// console で発行した sub を貼る)。
+// app-admin: Org 作成 + メンバー管理。Cognito user の作成自体は console(GUI 化予定)。
 
 function OrgsPanel({ me }: { me: Me }) {
   const [orgs, setOrgs] = useState<OrgRow[]>([]);
@@ -291,19 +355,35 @@ function OrgsPanel({ me }: { me: Me }) {
   }
 
   return (
-    <main style={{ maxWidth: 820, margin: '1rem auto', fontFamily: 'system-ui' }}>
-      <h2>組織管理(app-admin)</h2>
-      {error && <p style={errStyle}>{error}</p>}
-      <div style={box}>
-        <input placeholder="組織名" value={name} onChange={(e) => setName(e.target.value)} />{' '}
-        <button type="button" onClick={createOrg} disabled={!name}>
-          組織を作成
-        </button>
-      </div>
+    <Container maxWidth="md" sx={{ py: 3 }}>
+      <Typography variant="h5" gutterBottom>
+        組織管理
+      </Typography>
+      {error && (
+        <Alert severity="error" sx={{ mb: 2, whiteSpace: 'pre-wrap' }}>
+          {error}
+        </Alert>
+      )}
+      <Card variant="outlined" sx={{ mb: 3 }}>
+        <CardContent>
+          <Stack direction="row" spacing={1}>
+            <TextField
+              size="small"
+              label="組織名"
+              placeholder="組織名"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <Button variant="contained" onClick={createOrg} disabled={!name}>
+              組織を作成
+            </Button>
+          </Stack>
+        </CardContent>
+      </Card>
       {orgs.map((o) => (
         <OrgCard key={o.id} org={o} onError={run} />
       ))}
-    </main>
+    </Container>
   );
 }
 
@@ -351,35 +431,59 @@ function OrgCard({
   }
 
   return (
-    <div style={box}>
-      <strong>{org.name}</strong>{' '}
-      {org.status === 'suspended' && (
-        <span style={{ color: '#c40' }}>⚠ suspended(org-admin 不在)</span>
-      )}
-      <ul style={{ margin: '6px 0', paddingLeft: 20, fontSize: 13 }}>
-        {members.map((m) => (
-          <li key={m.userSub}>
-            <code>{m.userSub}</code> — {m.role}{' '}
-            <button type="button" onClick={() => void remove(m.userSub)}>
-              削除
-            </button>
-          </li>
-        ))}
-      </ul>
-      <input
-        placeholder="Cognito user の sub(console 発行 → 貼付、GUI 化は #12)"
-        value={sub}
-        onChange={(e) => setSub(e.target.value)}
-        style={{ width: 340 }}
-      />{' '}
-      <select value={role} onChange={(e) => setRole(e.target.value as 'org_admin' | 'user')}>
-        <option value="org_admin">org_admin</option>
-        <option value="user">user</option>
-      </select>{' '}
-      <button type="button" onClick={add} disabled={!sub}>
-        メンバー追加
-      </button>
-    </div>
+    <Card variant="outlined" sx={{ mb: 2 }}>
+      <CardContent>
+        <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+            {org.name}
+          </Typography>
+          {org.status === 'suspended' && <Chip size="small" color="error" label="suspended(org-admin 不在)" />}
+        </Stack>
+        <List dense>
+          {members.map((m) => (
+            <ListItem
+              key={m.userSub}
+              secondaryAction={
+                <Button size="small" color="error" onClick={() => void remove(m.userSub)}>
+                  削除
+                </Button>
+              }
+            >
+              <ListItemText
+                slotProps={{ primary: { sx: { fontFamily: 'monospace', fontSize: 13 } } }}
+                primary={m.userSub}
+                secondary={m.role}
+              />
+            </ListItem>
+          ))}
+        </List>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+          <TextField
+            size="small"
+            label="Cognito user の sub"
+            placeholder="Cognito user の sub(console 発行 → 貼付)"
+            value={sub}
+            onChange={(e) => setSub(e.target.value)}
+            sx={{ width: 380 }}
+          />
+          <TextField
+            select
+            size="small"
+            label="role"
+            value={role}
+            onChange={(e) => setRole(e.target.value as 'org_admin' | 'user')}
+            slotProps={{ select: { native: true } }}
+            sx={{ width: 140 }}
+          >
+            <option value="org_admin">org_admin</option>
+            <option value="user">user</option>
+          </TextField>
+          <Button variant="contained" onClick={add} disabled={!sub}>
+            メンバー追加
+          </Button>
+        </Stack>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -393,57 +497,57 @@ function Shell({ signOut }: { signOut?: () => void }) {
     void loadMe().then(setMe);
   }, []);
 
-  const tab = (active: boolean): React.CSSProperties => ({
-    padding: '6px 12px',
-    border: 'none',
-    borderBottom: active ? '2px solid #0a7' : '2px solid transparent',
-    background: 'none',
-    cursor: 'pointer',
-    fontWeight: active ? 600 : 400,
-  });
-
-  if (!me) return <p style={{ fontFamily: 'system-ui', margin: '2rem' }}>読み込み中…</p>;
+  if (!me) {
+    return (
+      <Container sx={{ py: 4 }}>
+        <Typography>読み込み中…</Typography>
+      </Container>
+    );
+  }
 
   return (
-    <div>
-      <nav
-        style={{
-          display: 'flex',
-          gap: 8,
-          borderBottom: '1px solid #eee',
-          padding: '8px 16px',
-          alignItems: 'center',
-        }}
-      >
-        <button type="button" style={tab(view === 'connections')} onClick={() => setView('connections')}>
-          freee 連携
-        </button>
-        {me.isAppAdmin && (
-          <button type="button" style={tab(view === 'orgs')} onClick={() => setView('orgs')}>
-            組織管理
-          </button>
-        )}
-        <button type="button" style={tab(view === 'guide')} onClick={() => setView('guide')}>
-          GPTs 設定ガイド
-        </button>
-        <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 12, color: '#666' }}>
-          {me.isAppAdmin ? 'app-admin' : (me.role ?? '未所属')}
-        </span>
-        <button type="button" onClick={signOut}>
-          サインアウト
-        </button>
-      </nav>
+    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
+      <AppBar position="static" elevation={1}>
+        <Toolbar variant="dense">
+          <Typography variant="h6" sx={{ mr: 3, fontSize: 16 }}>
+            freee GPT bridge
+          </Typography>
+          <Tabs
+            value={view}
+            onChange={(_, v) => setView(v as typeof view)}
+            textColor="inherit"
+            indicatorColor="secondary"
+            sx={{ flex: 1 }}
+          >
+            <Tab value="connections" label="freee 連携" />
+            {me.isAppAdmin && <Tab value="orgs" label="組織管理" />}
+            <Tab value="guide" label="GPTs 設定ガイド" />
+          </Tabs>
+          <Chip
+            size="small"
+            variant="outlined"
+            color="default"
+            sx={{ color: 'inherit', borderColor: 'rgba(255,255,255,0.5)', mr: 1.5 }}
+            label={me.isAppAdmin ? 'app-admin' : (me.role ?? '未所属')}
+          />
+          <Button color="inherit" onClick={signOut}>
+            サインアウト
+          </Button>
+        </Toolbar>
+      </AppBar>
       {view === 'connections' && <ConnectionsPanel me={me} />}
       {view === 'orgs' && me.isAppAdmin && <OrgsPanel me={me} />}
-      {view === 'guide' && <GptSetupGuide />}
-    </div>
+      {view === 'guide' && (
+        <Container maxWidth="md" sx={{ py: 3, bgcolor: 'background.paper' }}>
+          <GptSetupGuide />
+        </Container>
+      )}
+    </Box>
   );
 }
 
 function App() {
-  // hideSignUp: self sign-up is disabled (operators are admin-created).
-  return <Authenticator hideSignUp>{({ signOut }) => <Shell signOut={signOut} />}</Authenticator>;
+  return <Providers>{(signOut) => <Shell signOut={signOut} />}</Providers>;
 }
 
 export default App;
