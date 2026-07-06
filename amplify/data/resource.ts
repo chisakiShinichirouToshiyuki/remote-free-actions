@@ -100,6 +100,12 @@ const schema = a
         accessTokenExpiresAt: a.datetime(), // cache
         status: a.enum(['connected', 'needs_reauth']), // 接続の健全性(この model の status)
         tokenVersion: a.integer(), // 楽観ロック
+        // refresh の single-flight リース(epoch ms)。freee の refresh_token は
+        // single-use rotation なので並行 refresh は「後勝ち」ではなく token 焼失を招く
+        // (#33)。bridge が freee を叩く前に (tokenVersion 条件付きで) DynamoDB
+        // conditional write でこの値を掴んだ 1 本だけが refresh し、他は待って
+        // 永続化済み token を使う。stale リースは次回 refresh 時刻には期限切れ。
+        refreshLeaseUntil: a.integer(),
         createdBy: a.string(), // 登録した org-admin の sub
         updatedBy: a.string(),
         accesses: a.hasMany('UserConnection', 'connectionId'),

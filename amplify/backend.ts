@@ -107,6 +107,15 @@ const bridgeUrl = backend.bridge.resources.lambda.addFunctionUrl({
 backend.bridge.addEnvironment('USER_POOL_ID', backend.auth.resources.userPool.userPoolId);
 backend.bridge.addEnvironment('CLIENT_ID', backend.auth.resources.userPoolClient.userPoolClientId);
 
+// #33 single-flight token refresh: the bridge takes a DynamoDB conditional-write
+// lease on the FreeeConnection row BEFORE hitting freee, so concurrent GPT calls
+// don't each burn the single-use refresh token. Reads still go through AppSync
+// (IAM); this grant + table name are only for the lease UpdateItem.
+const freeeConnectionTable = backend.data.resources.tables['FreeeConnection'];
+if (!freeeConnectionTable) throw new Error('FreeeConnection table not found: refresh lease unavailable');
+freeeConnectionTable.grantWriteData(backend.bridge.resources.lambda);
+backend.bridge.addEnvironment('FREEE_CONNECTION_TABLE', freeeConnectionTable.tableName);
+
 backend.addOutput({ custom: { bridgeUrl: bridgeUrl.url } });
 
 // Org-admin reconciler: reconciles Membership against Cognito and suspends orgs

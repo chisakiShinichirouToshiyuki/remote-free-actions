@@ -70,6 +70,8 @@ type Conn = {
 const connections = new Map<string, Conn>();
 const orgs = new Map<string, { id: string; status?: string }>();
 const grants: Array<{ userSub: string; connectionId: string; status?: string }> = [];
+// Refresh leases keyed by connectionId (mirrors the DynamoDB row's refreshLeaseUntil).
+const leases = new Map<string, number>();
 
 const models = {
   UserConnection: {
@@ -97,6 +99,38 @@ vi.mock('@aws-amplify/backend/function/runtime', () => ({
 vi.mock('aws-amplify', () => ({ Amplify: { configure: () => {} } }));
 vi.mock('aws-amplify/data', () => ({ generateClient: () => ({ models }) }));
 
+// Emulate the #33 single-flight lease: a conditional UpdateItem that succeeds
+// only while the row is still at the expected tokenVersion AND no live lease is
+// held. This is what serializes concurrent refreshers cross-container.
+class ConditionalCheckFailedException extends Error {
+  override name = 'ConditionalCheckFailedException';
+}
+vi.mock('@aws-sdk/client-dynamodb', () => ({
+  ConditionalCheckFailedException,
+  DynamoDBClient: class {
+    async send(cmd: { input: Record<string, { S?: string }> & { Key: { id: { S: string } }; ExpressionAttributeValues: Record<string, { N: string }> } }) {
+      const id = cmd.input.Key.id.S;
+      const v = cmd.input.ExpressionAttributeValues;
+      const expected = Number(v[':v']?.N);
+      const now = Number(v[':now']?.N);
+      const until = Number(v[':until']?.N);
+      const curVersion = connections.get(id)?.tokenVersion ?? 0;
+      const curLease = leases.get(id) ?? 0;
+      if (curVersion !== expected || curLease >= now) {
+        throw new ConditionalCheckFailedException('conditional check failed');
+      }
+      leases.set(id, until);
+      return {};
+    }
+  },
+  UpdateItemCommand: class {
+    input: unknown;
+    constructor(input: unknown) {
+      this.input = input;
+    }
+  },
+}));
+
 const SUB = 'abcd1234-0000-4000-8000-000000000001'; // Cognito sub is a UUID (SUB_SHAPE guard)
 const fetchMock = vi.fn();
 vi.stubGlobal('fetch', fetchMock);
@@ -116,6 +150,7 @@ beforeAll(async () => {
   process.env.FREEE_ACCOUNTS_ORIGIN = 'https://accounts.example.test';
   process.env.FREEE_API_ORIGIN = 'https://api.example.test';
   process.env.TOKEN_KMS_KEY_ARN = 'arn:aws:kms:ap-northeast-1:000000000000:key/test';
+  process.env.FREEE_CONNECTION_TABLE = 'FreeeConnection-test';
   ({ handler } = await import('./handler'));
 });
 
@@ -143,6 +178,7 @@ beforeEach(() => {
   connections.clear();
   orgs.clear();
   grants.length = 0;
+  leases.clear();
 
   orgs.set('org-1', { id: 'org-1' });
   connections.set('conn-1', {
@@ -301,5 +337,39 @@ describe('token rotation (persist-before-use)', () => {
     expect(res.body).toContain('org-admin must reconnect');
     expect(connections.get('conn-1')?.status).toBe('needs_reauth');
     expect(fetchMock).toHaveBeenCalledTimes(1); // only the token endpoint
+  });
+
+  it('concurrent expired-token calls refresh EXACTLY once (single-flight lease #33) — the loser reuses the rotated token', async () => {
+    let tokenExchanges = 0;
+    fetchMock.mockImplementation(async (url: URL) => {
+      if (url.toString().includes('/public_api/token')) {
+        tokenExchanges++;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ access_token: NEW_AT, refresh_token: NEW_RT, expires_in: 3600 }),
+          text: async () => '',
+        };
+      }
+      return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) };
+    });
+
+    // Two GPT calls race on the same expired connection.
+    const [a, b] = await Promise.all([
+      callTool('freee_api_get', { path: '/api/1/companies' }),
+      callTool('freee_api_get', { path: '/api/1/companies' }),
+    ]);
+
+    expect(a.statusCode).toBe(200);
+    expect(b.statusCode).toBe(200);
+    // The refresh token was single-use; it must have been exchanged only once.
+    expect(tokenExchanges).toBe(1);
+    // Both requests reached freee with the SAME rotated access token.
+    const apiAuths = (fetchMock.mock.calls as [URL, RequestInit][])
+      .filter(([u]) => u.toString().includes('/api/1/companies'))
+      .map(([, init]) => (init.headers as Record<string, string>).authorization);
+    expect(apiAuths).toEqual([`Bearer ${NEW_AT}`, `Bearer ${NEW_AT}`]);
+    // The row landed on a single version bump, not two.
+    expect(connections.get('conn-1')?.tokenVersion).toBe(2);
   });
 });

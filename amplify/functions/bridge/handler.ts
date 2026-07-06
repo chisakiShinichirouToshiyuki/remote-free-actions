@@ -1,4 +1,9 @@
 import { getAmplifyDataClientConfig } from '@aws-amplify/backend/function/runtime';
+import {
+  ConditionalCheckFailedException,
+  DynamoDBClient,
+  UpdateItemCommand,
+} from '@aws-sdk/client-dynamodb';
 import { KMSClient } from '@aws-sdk/client-kms';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { Amplify } from 'aws-amplify';
@@ -18,6 +23,7 @@ Amplify.configure(resourceConfig, libraryOptions);
 const client = generateClient<Schema>({ authMode: 'iam' });
 const kms = new KMSClient({});
 const secrets = new SecretsManagerClient({});
+const ddb = new DynamoDBClient({});
 
 // Verify Cognito access tokens (GPT signs in via Cognito OAuth, sends Bearer).
 const verifier = CognitoJwtVerifier.create({
@@ -135,28 +141,74 @@ async function markNeedsReauth(connectionId: string): Promise<void> {
   });
 }
 
+// Single-flight refresh lease (#33). freee rotates refresh tokens single-use, so
+// two concurrent expired-token requests must NOT both call /public_api/token —
+// the second burns the (now-consumed) token and strands the connection. The
+// bridge takes a DynamoDB conditional-write lease keyed on tokenVersion before
+// touching freee; the loser waits for the winner's persisted token instead.
+const LEASE_MS = 15_000; // > a freee token exchange; a crashed holder's lease self-expires
+const WAIT_POLL_MS = 250;
+const WAIT_MAX_MS = 10_000; // loser gives up well within the 60s Lambda timeout
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 /**
- * Returns a usable access token. Cached ciphertext is used until shortly
- * before expiry; otherwise refresh + PERSIST-BEFORE-USE (a rotated refresh
- * token that is used but not stored would strand the connection).
+ * Atomically claim the right to refresh `conn`. Succeeds only while the row is
+ * still at `expectedVersion` (no one else has rotated) AND no live lease is
+ * held. A stale lease from a previous generation is already `< now`, so it does
+ * not block — no explicit release is needed (the version bump on persist plus
+ * lease expiry close the window).
  */
-async function getAccessToken(conn: Connection): Promise<string> {
-  const now = Date.now();
-  const validUntil = conn.accessTokenExpiresAt ? Date.parse(conn.accessTokenExpiresAt) : 0;
-  if (conn.accessTokenCipher && validUntil > now + 60_000) {
-    return kmsDecryptToken(kms, conn.accessTokenCipher, conn.id);
+async function acquireRefreshLease(
+  connectionId: string,
+  expectedVersion: number,
+  now: number,
+): Promise<boolean> {
+  try {
+    await ddb.send(
+      new UpdateItemCommand({
+        TableName: env.FREEE_CONNECTION_TABLE,
+        Key: { id: { S: connectionId } },
+        UpdateExpression: 'SET refreshLeaseUntil = :until',
+        ConditionExpression:
+          '(attribute_not_exists(tokenVersion) OR tokenVersion = :v) AND (attribute_not_exists(refreshLeaseUntil) OR refreshLeaseUntil < :now)',
+        ExpressionAttributeValues: {
+          ':until': { N: String(now + LEASE_MS) },
+          ':v': { N: String(expectedVersion) },
+          ':now': { N: String(now) },
+        },
+      }),
+    );
+    return true;
+  } catch (e) {
+    if (e instanceof ConditionalCheckFailedException) return false;
+    throw e;
   }
+}
 
-  if (!conn.refreshTokenCipher || !conn.secretArn) {
-    throw new BridgeUserError('freee is not connected yet. An operator must connect it first.');
-  }
-  if (conn.status === 'needs_reauth') {
-    throw new BridgeUserError('This connection needs re-authorization by an org-admin.');
-  }
+/** Loser path: poll for the lease winner's freshly persisted token. */
+async function awaitRefreshedToken(connectionId: string, expectedVersion: number): Promise<string> {
+  const deadline = Date.now() + WAIT_MAX_MS;
+  do {
+    await sleep(WAIT_POLL_MS);
+    const { data: fresh } = await client.models.FreeeConnection.get({ id: connectionId });
+    if (!fresh) throw new BridgeUserError('Connection no longer exists');
+    if (fresh.status === 'needs_reauth') {
+      throw new BridgeUserError('This connection needs re-authorization by an org-admin.');
+    }
+    if ((fresh.tokenVersion ?? 0) > expectedVersion && fresh.accessTokenCipher) {
+      return kmsDecryptToken(kms, fresh.accessTokenCipher, connectionId);
+    }
+  } while (Date.now() < deadline);
+  // The holder is slow or died mid-refresh; a retry will re-race the lease.
+  throw new BridgeUserError('freee token refresh is in progress — please retry.');
+}
 
+/** Winner path: exchange the refresh token and PERSIST-BEFORE-USE. */
+async function refreshAndPersist(conn: Connection, now: number): Promise<string> {
   const [refreshToken, secret] = await Promise.all([
-    kmsDecryptToken(kms, conn.refreshTokenCipher, conn.id),
-    secrets.send(new GetSecretValueCommand({ SecretId: conn.secretArn })),
+    kmsDecryptToken(kms, conn.refreshTokenCipher as string, conn.id),
+    secrets.send(new GetSecretValueCommand({ SecretId: conn.secretArn as string })),
   ]);
   if (!secret.SecretString) throw new BridgeUserError('client secret unreadable');
 
@@ -178,7 +230,8 @@ async function getAccessToken(conn: Connection): Promise<string> {
       kmsEncryptToken(kms, env.TOKEN_KMS_KEY_ARN, tokens.access_token, conn.id),
     ]);
     // Persist BEFORE first use — single-use rotation means an unstored refresh
-    // token is an unrecoverable loss.
+    // token is an unrecoverable loss. The version bump also invalidates the
+    // lease generation so late losers see the new token, not a re-refresh.
     await client.models.FreeeConnection.update({
       id: conn.id,
       refreshTokenCipher: refreshCipher,
@@ -195,6 +248,33 @@ async function getAccessToken(conn: Connection): Promise<string> {
   // row so operators see it; do NOT retry with the same token.
   await markNeedsReauth(conn.id);
   throw new BridgeUserError('freee session expired — an org-admin must reconnect this app.');
+}
+
+/**
+ * Returns a usable access token. Cached ciphertext is used until shortly
+ * before expiry; otherwise a single-flight refresh (one lease winner exchanges +
+ * persists, concurrent callers reuse that result).
+ */
+async function getAccessToken(conn: Connection): Promise<string> {
+  const now = Date.now();
+  const validUntil = conn.accessTokenExpiresAt ? Date.parse(conn.accessTokenExpiresAt) : 0;
+  if (conn.accessTokenCipher && validUntil > now + 60_000) {
+    return kmsDecryptToken(kms, conn.accessTokenCipher, conn.id);
+  }
+
+  if (!conn.refreshTokenCipher || !conn.secretArn) {
+    throw new BridgeUserError('freee is not connected yet. An operator must connect it first.');
+  }
+  if (conn.status === 'needs_reauth') {
+    throw new BridgeUserError('This connection needs re-authorization by an org-admin.');
+  }
+
+  const expectedVersion = conn.tokenVersion ?? 0;
+  if (await acquireRefreshLease(conn.id, expectedVersion, now)) {
+    return refreshAndPersist(conn, now);
+  }
+  // Another invocation holds the lease (or already rotated) — reuse its token.
+  return awaitRefreshedToken(conn.id, expectedVersion);
 }
 
 const API_PATH = /^\/api\/1\/[A-Za-z0-9_\-/]*$/;
