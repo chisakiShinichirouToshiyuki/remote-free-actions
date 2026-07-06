@@ -26,5 +26,9 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['amplify/**/*.test.ts', 'src/**/*.test.ts', 'src/**/*.test.tsx'],
+    // Inline free-actions-core so its internal `aws-jwt-verify` import is
+    // intercepted by the bridge test's module mock (the auth verifier now lives
+    // in the shared library, not the handler).
+    server: { deps: { inline: ['free-actions-core'] } },
   },
 });
