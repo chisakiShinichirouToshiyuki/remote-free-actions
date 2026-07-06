@@ -8,8 +8,8 @@ import { KMSClient } from '@aws-sdk/client-kms';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { Amplify } from 'aws-amplify';
 import { generateClient } from 'aws-amplify/data';
-import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import { ActionsBridge, type McpProxyLike, type McpTool } from 'free-actions-core';
+import { createCognitoAuthorizer, createFunctionUrlHandler } from 'free-actions-core/aws';
 import type { Schema } from '../../data/resource';
 import {
   kmsDecryptToken,
@@ -24,13 +24,6 @@ const client = generateClient<Schema>({ authMode: 'iam' });
 const kms = new KMSClient({});
 const secrets = new SecretsManagerClient({});
 const ddb = new DynamoDBClient({});
-
-// Verify Cognito access tokens (GPT signs in via Cognito OAuth, sends Bearer).
-const verifier = CognitoJwtVerifier.create({
-  userPoolId: env.USER_POOL_ID ?? '',
-  tokenUse: 'access',
-  clientId: env.CLIENT_ID || null,
-});
 
 class BridgeUserError extends Error {}
 
@@ -332,59 +325,17 @@ class FreeBridgeProxy implements McpProxyLike {
   }
 }
 
-// Cognito subs are UUIDs. Rejecting anything else keeps token claims from
-// flowing anywhere unvalidated (and is the taint barrier for JWT sources).
-const SUB_SHAPE = /^[0-9a-fA-F-]{8,64}$/;
-
-async function verifiedSub(headers: Record<string, string | undefined>): Promise<string | null> {
-  const bearer = stripBearer(headers.authorization ?? headers.Authorization);
-  if (!bearer || !env.USER_POOL_ID) return null;
-  try {
-    const payload = await verifier.verify(bearer);
-    return typeof payload.sub === 'string' && SUB_SHAPE.test(payload.sub) ? payload.sub : null;
-  } catch {
-    return null;
-  }
-}
-
-function stripBearer(v: string | undefined): string | undefined {
-  if (!v) return undefined;
-  return v.startsWith('Bearer ') ? v.slice(7) : v;
-}
-
-interface FnUrlEvent {
-  requestContext?: { http?: { method?: string } };
-  rawPath?: string;
-  headers?: Record<string, string | undefined>;
-  body?: string;
-}
-
-export const handler = async (event: FnUrlEvent) => {
-  const method = event.requestContext?.http?.method ?? 'GET';
-  const path = (event.rawPath ?? '/').replace(/\/+$/, '') || '/';
-  const headers = event.headers ?? {};
-
-  // deny-by-default: every route requires a valid Cognito access token
-  const sub = await verifiedSub(headers);
-  if (!sub) {
-    return json(401, { error: 'Unauthorized: Cognito sign-in required' });
-  }
-
-  const bridge = new ActionsBridge({ mcpServerUrl: 'inproc://freee' }, new FreeBridgeProxy(sub));
-
-  if (method === 'GET' && path === '/tools') return respond(await bridge.listTools());
-  if (method === 'POST' && path === '/call') return respond(await bridge.call(event.body ?? '{}'));
-  if (method === 'GET' && path === '/openapi') {
-    const host = headers['x-forwarded-host'];
-    const origin = host ? `https://${host}` : 'https://bridge.example.com';
-    return respond(await bridge.openapi({ serverUrl: origin, title: 'freee GPT bridge' }));
-  }
-  return json(404, { error: 'Not found' });
-};
-
-function respond(r: { status: number; body: unknown }) {
-  return json(r.status, r.body);
-}
-function json(status: number, body: unknown) {
-  return { statusCode: status, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) };
-}
+// The GPT-facing surface (deny-by-default Cognito auth, GET /tools · POST /call ·
+// GET /openapi routing, JSON serialization) is the shared free-actions-core/aws
+// handler. All that stays here is the freee-specific per-caller proxy: each
+// verified `sub` resolves to THEIR own freee connection/token (FreeBridgeProxy).
+export const handler = createFunctionUrlHandler({
+  authorize: createCognitoAuthorizer({
+    userPoolId: env.USER_POOL_ID ?? '',
+    clientId: env.CLIENT_ID || null,
+    // Cognito subs are UUIDs — the taint barrier for JWT-sourced claims.
+  }),
+  createBridge: ({ sub }) =>
+    new ActionsBridge({ mcpServerUrl: 'inproc://freee' }, new FreeBridgeProxy(sub)),
+  openApi: { title: 'freee GPT bridge' },
+});
