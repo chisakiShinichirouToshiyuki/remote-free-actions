@@ -65,4 +65,16 @@ export default defineConfig([{
         // secrets in this repo are compared only inside vetted libs (JWT verify).
         "security/detect-possible-timing-attacks": "error",
     },
-}, security.configs.recommended, globalIgnores(["**/dist", ".amplify", "amplify_outputs.json"])]);
+}, security.configs.recommended, {
+    // Node CLI utilities (deploy/bootstrap), not part of the browser bundle.
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+        globals: {
+            ...globals.node,
+        },
+    },
+    rules: {
+        // Reading a user-supplied outputs path is the whole point of the tool.
+        "security/detect-non-literal-fs-filename": "off",
+    },
+}, globalIgnores(["**/dist", ".amplify", "amplify_outputs.json"])]);
