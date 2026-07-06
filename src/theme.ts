@@ -12,4 +12,8 @@ export const theme = createTheme({
     background: { default: '#f5f5f5', paper: '#fff' },
   },
   typography: { fontFamily: "'Roboto', 'Noto Sans JP', sans-serif" },
+  components: {
+    // 影なしのフラットなボタンで統一(elevation のばらつきを排除)。
+    MuiButton: { defaultProps: { disableElevation: true } },
+  },
 });

@@ -24,6 +24,12 @@ vi.mock('@aws-sdk/client-secrets-manager', () => ({
       this.input = input;
     }
   },
+  DeleteSecretCommand: class {
+    input: unknown;
+    constructor(input: unknown) {
+      this.input = input;
+    }
+  },
 }));
 
 type Conn = {
@@ -37,6 +43,7 @@ type Conn = {
 const connections = new Map<string, Conn>();
 const memberships = new Map<string, { orgId: string; role: string; status?: string | null }>();
 const states: Array<{ jti: string; connectionId: string; ttl: number }> = [];
+const grants: Array<{ connectionId: string; userSub: string; status?: string }> = [];
 let seq = 0;
 
 const models = {
@@ -57,10 +64,25 @@ const models = {
       if (cur) connections.set(patch.id, { ...cur, ...patch });
       return { data: connections.get(patch.id) };
     }),
+    delete: vi.fn(async ({ id }: { id: string }) => {
+      const existed = connections.delete(id);
+      return { data: existed ? { id } : null, errors: undefined };
+    }),
     listFreeeConnectionByOrgId: vi.fn(async ({ orgId }: { orgId: string }) => ({
       data: [...connections.values()].filter((c) => c.orgId === orgId),
       nextToken: null,
     })),
+  },
+  UserConnection: {
+    list: vi.fn(async ({ filter }: { filter?: { connectionId?: { eq: string } } }) => ({
+      data: grants.filter((g) => !filter?.connectionId || g.connectionId === filter.connectionId.eq),
+      nextToken: null,
+    })),
+    delete: vi.fn(async ({ connectionId, userSub }: { connectionId: string; userSub: string }) => {
+      const i = grants.findIndex((g) => g.connectionId === connectionId && g.userSub === userSub);
+      if (i >= 0) grants.splice(i, 1);
+      return { data: null, errors: undefined };
+    }),
   },
   FreeeOAuthState: {
     create: vi.fn(async (row: { jti: string; connectionId: string; ttl: number }) => {
@@ -85,7 +107,7 @@ const { handler } = await import('./handler');
 const ORG_ADMIN = 'admin-1';
 
 function call(
-  fieldName: 'registerFreeeApp' | 'startFreeeAuthorize' | 'listOrgConnections',
+  fieldName: 'registerFreeeApp' | 'startFreeeAuthorize' | 'listOrgConnections' | 'deleteFreeeApp',
   args: object,
   sub = ORG_ADMIN,
 ) {
@@ -101,6 +123,7 @@ beforeEach(() => {
   connections.clear();
   memberships.clear();
   states.length = 0;
+  grants.length = 0;
   sent.length = 0;
   memberships.set(ORG_ADMIN, { orgId: 'org-1', role: 'org_admin', status: 'active' });
 });
@@ -195,5 +218,50 @@ describe('startFreeeAuthorize', () => {
     await expect(call('startFreeeAuthorize', { connectionId: reg.id }, 'other-admin')).rejects.toThrow(
       /Forbidden/,
     );
+  });
+});
+
+describe('deleteFreeeApp', () => {
+  async function register() {
+    return (await call('registerFreeeApp', {
+      orgId: 'org-1',
+      label: 'a',
+      clientId: 'cid-1',
+      clientSecret: 's',
+    })) as Conn;
+  }
+
+  it('deletes the connection, all its user grants, and the stored client_secret', async () => {
+    const reg = await register();
+    grants.push({ connectionId: reg.id, userSub: 'u-1', status: 'active' });
+    grants.push({ connectionId: reg.id, userSub: 'u-2', status: 'active' });
+    grants.push({ connectionId: 'other-conn', userSub: 'u-3', status: 'active' }); // 別接続は残す
+
+    const res = await call('deleteFreeeApp', { connectionId: reg.id });
+
+    expect(res).toBe(reg.id);
+    expect(connections.has(reg.id)).toBe(false);
+    expect(grants.filter((g) => g.connectionId === reg.id)).toHaveLength(0);
+    expect(grants.filter((g) => g.connectionId === 'other-conn')).toHaveLength(1);
+    // secret も DeleteSecret で破棄(ForceDeleteWithoutRecovery が付く)。
+    expect(JSON.stringify(sent)).toContain('ForceDeleteWithoutRecovery');
+  });
+
+  it('a non-admin of the org cannot delete', async () => {
+    const reg = await register();
+    memberships.set('user-1', { orgId: 'org-1', role: 'user', status: 'active' });
+    await expect(call('deleteFreeeApp', { connectionId: reg.id }, 'user-1')).rejects.toThrow(/Forbidden/);
+    expect(connections.has(reg.id)).toBe(true);
+  });
+
+  it("an org-admin of ANOTHER org cannot delete this org's connection", async () => {
+    const reg = await register();
+    memberships.set('other-admin', { orgId: 'org-2', role: 'org_admin', status: 'active' });
+    await expect(call('deleteFreeeApp', { connectionId: reg.id }, 'other-admin')).rejects.toThrow(/Forbidden/);
+    expect(connections.has(reg.id)).toBe(true);
+  });
+
+  it('rejects an unknown connection', async () => {
+    await expect(call('deleteFreeeApp', { connectionId: 'nope' })).rejects.toThrow(/not found/);
   });
 });
