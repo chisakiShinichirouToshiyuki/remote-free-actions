@@ -197,6 +197,14 @@ const schema = a
       .returns(a.string()) // freee authorize URL
       .handler(a.handler.function(freeeConnect))
       .authorization((allow) => [allow.authenticated()]),
+    // freee アプリ(接続)の削除。org-admin 検証のうえ UserConnection 割当 +
+    // client_secret(Secrets Manager)+ FreeeConnection を消す。
+    deleteFreeeApp: a
+      .mutation()
+      .arguments({ connectionId: a.id().required() })
+      .returns(a.string()) // 削除した connectionId
+      .handler(a.handler.function(freeeConnect))
+      .authorization((allow) => [allow.authenticated()]),
     // org-admin GUI 用の接続一覧。FreeeConnection の model read は app-admin 限定
     // (cipher 列を含むため緩められない)なので、Lambda が org-admin 検証のうえ
     // sanitized な列だけ返す。

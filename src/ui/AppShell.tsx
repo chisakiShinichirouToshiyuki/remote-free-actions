@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import Box from '@mui/material/Box';
 import Breadcrumbs from '@mui/material/Breadcrumbs';
+import Link from '@mui/material/Link';
 import Stack from '@mui/material/Stack';
 import Typography from '@mui/material/Typography';
 
@@ -16,6 +17,9 @@ export interface SidebarItem {
   icon: ReactNode;
   onClick: () => void;
 }
+
+// breadcrumb の 1 segment。onClick 付きは link(前段に戻る等)、素の string は現在地。
+export type BreadcrumbItem = string | { label: string; onClick: () => void };
 
 function Item({ item, active }: { item: SidebarItem; active: boolean }) {
   return (
@@ -45,7 +49,7 @@ function Item({ item, active }: { item: SidebarItem; active: boolean }) {
       }}
     >
       {item.icon}
-      <Typography sx={{ fontSize: 10, lineHeight: 1.2, textAlign: 'center' }}>{item.label}</Typography>
+      <Typography sx={{ fontSize: 9, lineHeight: 1.1, textAlign: 'center' }}>{item.label}</Typography>
     </Box>
   );
 }
@@ -61,7 +65,7 @@ export function AppShell({
   topItems: SidebarItem[];
   bottomItems: SidebarItem[];
   activeItemId: string;
-  breadcrumbs: string[];
+  breadcrumbs: BreadcrumbItem[];
   actions?: ReactNode;
   children: ReactNode;
 }) {
@@ -122,9 +126,22 @@ export function AppShell({
             aria-label="breadcrumb"
             sx={{ minWidth: 0 }}
           >
-            {breadcrumbs.map((label, idx) => {
+            {breadcrumbs.map((item, idx) => {
               const isLast = idx === breadcrumbs.length - 1;
-              return (
+              const label = typeof item === 'string' ? item : item.label;
+              const onClick = typeof item === 'string' ? undefined : item.onClick;
+              return onClick ? (
+                <Link
+                  key={label}
+                  component="button"
+                  type="button"
+                  onClick={onClick}
+                  underline="always"
+                  sx={{ color: 'primary.main', fontWeight: 500, fontSize: '1rem', whiteSpace: 'nowrap' }}
+                >
+                  {label}
+                </Link>
+              ) : (
                 <Typography
                   key={label}
                   variant="body1"

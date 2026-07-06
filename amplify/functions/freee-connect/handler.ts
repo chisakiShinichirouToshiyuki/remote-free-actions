@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { getAmplifyDataClientConfig } from '@aws-amplify/backend/function/runtime';
 import {
   CreateSecretCommand,
+  DeleteSecretCommand,
   PutSecretValueCommand,
   SecretsManagerClient,
 } from '@aws-sdk/client-secrets-manager';
@@ -18,7 +19,7 @@ const secrets = new SecretsManagerClient({});
 
 const STATE_TTL_SECONDS = 10 * 60;
 
-type FieldName = 'registerFreeeApp' | 'startFreeeAuthorize' | 'listOrgConnections';
+type FieldName = 'registerFreeeApp' | 'startFreeeAuthorize' | 'listOrgConnections' | 'deleteFreeeApp';
 
 // Amplify Gen2 custom operations deliver fieldName at the TOP LEVEL of the
 // payload; the classic AppSync direct-resolver shape nests it under info.
@@ -132,6 +133,38 @@ export const handler = async (event: Event) => {
         status: c.status ?? 'needs_reauth',
         secretWrittenAt: c.secretWrittenAt ?? null,
       }));
+    }
+
+    case 'deleteFreeeApp': {
+      if (!a.connectionId) throw new RejectError('connectionId is required');
+      const { data: conn } = await client.models.FreeeConnection.get({ id: a.connectionId });
+      if (!conn) throw new RejectError('Connection not found');
+      await assertCanManageOrg(client.models.Membership, caller, conn.orgId);
+
+      // 割当(UserConnection)を先に削除。
+      const { data: grants } = await client.models.UserConnection.list({
+        filter: { connectionId: { eq: conn.id } },
+      });
+      await Promise.all(
+        (grants ?? []).map((g) =>
+          client.models.UserConnection.delete({ connectionId: g.connectionId, userSub: g.userSub }),
+        ),
+      );
+
+      // client_secret も破棄(復旧不要)。既に無ければ無視。
+      if (conn.secretArn) {
+        try {
+          await secrets.send(
+            new DeleteSecretCommand({ SecretId: conn.secretArn, ForceDeleteWithoutRecovery: true }),
+          );
+        } catch {
+          /* secret が無い/消えている場合は無視 */
+        }
+      }
+
+      const { errors } = await client.models.FreeeConnection.delete({ id: conn.id });
+      if (errors?.length) throw new RejectError('Failed to delete connection');
+      return conn.id;
     }
 
     default:

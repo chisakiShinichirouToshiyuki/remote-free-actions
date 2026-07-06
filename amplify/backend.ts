@@ -207,7 +207,11 @@ const secretArnPattern = connectStack.formatArn({
 });
 backend.freeeConnect.resources.lambda.addToRolePolicy(
   new PolicyStatement({
-    actions: ['secretsmanager:CreateSecret', 'secretsmanager:PutSecretValue'],
+    actions: [
+      'secretsmanager:CreateSecret',
+      'secretsmanager:PutSecretValue',
+      'secretsmanager:DeleteSecret',
+    ],
     resources: [secretArnPattern],
   }),
 );
