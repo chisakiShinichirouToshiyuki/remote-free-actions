@@ -105,7 +105,11 @@ const bridgeUrl = backend.bridge.resources.lambda.addFunctionUrl({
   authType: FunctionUrlAuthType.NONE,
 });
 backend.bridge.addEnvironment('USER_POOL_ID', backend.auth.resources.userPool.userPoolId);
-backend.bridge.addEnvironment('CLIENT_ID', backend.auth.resources.userPoolClient.userPoolClientId);
+// Bridge is the GPT-facing surface: GPT mints its access token with the
+// GptActionsClient (OAuth), NOT the operator-GUI web client. Bind CLIENT_ID to
+// the GPT client so the authorizer's client_id check passes (else every GPT
+// call 401s). See #47.
+backend.bridge.addEnvironment('CLIENT_ID', gptClient.userPoolClientId);
 
 // #33 single-flight token refresh: the bridge takes a DynamoDB conditional-write
 // lease on the FreeeConnection row BEFORE hitting freee, so concurrent GPT calls
